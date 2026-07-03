@@ -5,4 +5,4 @@
 
 # Server Information
 
-_99/99cap server with various customizations._
+_99/99 server with various customizations._
