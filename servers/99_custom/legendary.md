@@ -1,6 +1,6 @@
 # Legendary (99 Cap)
 
-  - **Website:** https://legendary-ffxi.pages.dev/
+  - **Website:** https://www.ffxi-legendary.com/
   - **Discord:** https://discord.gg/xVsdAgdXjy
 
 # Server Information
