@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>FFXI DAT Editor</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top-bar">
+    <div class="title">
+        <strong>FFXI DAT Editor</strong>
+        <span class="path" title="{{ dat_path }}">{{ dat_path }}</span>
+    </div>
+    <div class="counts">
+        <span>{{ item_count }} items</span>
+        <button id="save-btn">Save…</button>
+    </div>
+</header>
+
+<main class="layout">
+    <aside class="sidebar">
+        <div class="search-box">
+            <input id="search" type="text" placeholder="Search by id or name…">
+        </div>
+        <ul id="item-list" class="item-list"></ul>
+        <div class="pager">
+            <button id="prev-page">&lsaquo; Prev</button>
+            <span id="page-info">–</span>
+            <button id="next-page">Next &rsaquo;</button>
+        </div>
+    </aside>
+    <section id="editor" class="editor">
+        <p class="hint">Select an item on the left to edit.</p>
+    </section>
+</main>
+
+<div id="save-dialog" class="modal hidden">
+    <div class="modal-card">
+        <h3>Save DAT</h3>
+        <p>Write the current edits to a DAT file.</p>
+        <label>
+            Output path
+            <input id="save-path" type="text" placeholder="/path/to/output.DAT">
+        </label>
+        {% if allow_in_place %}
+        <p class="warn">In-place save is <strong>enabled</strong> — leaving the path blank will overwrite the source DAT.</p>
+        {% else %}
+        <p class="hint">In-place save is disabled. Give an output path so the source DAT is not overwritten.</p>
+        {% endif %}
+        <div class="modal-actions">
+            <button id="save-cancel" class="secondary">Cancel</button>
+            <button id="save-confirm">Save</button>
+        </div>
+        <p id="save-status" class="status"></p>
+    </div>
+</div>
+
+<script>window.__ALLOW_IN_PLACE__ = {{ 'true' if allow_in_place else 'false' }};</script>
+<script src="/static/app.js"></script>
+</body>
+</html>
