@@ -13,6 +13,11 @@ survive a round-trip untouched.
 
 For each item you can change:
 
+- **Name and description** (and log-name variants) — free-text edit in
+  the web UI, `strings_block` field in JSON patches. New text lengths
+  can differ from the originals; the offset table is recomputed on
+  save. If a rewrite would overflow the strings block, the edit is
+  rejected instead of silently corrupting the record.
 - Basics: id, level to equip, item level, flags, stack size, valid
   targets, model id, resource id
 - Slots (MAIN, SUB, RANGED, AMMO, HEAD, BODY, HANDS, LEGS, FEET, NECK,
@@ -24,15 +29,12 @@ For each item you can change:
 
 ## What it can't do (yet)
 
-- **Item name / description strings** are shown as a read-only preview.
-  The name/description block in an item record uses FFXI's dialog-table
-  string format, which packs multiple language variants at variable
-  offsets. Editing those safely means either matching the exact byte
-  length of every string or rewriting the whole offset table. Both are
-  in scope for a follow-up; for now, use a POLUtils-style tool or hex
-  editor if you need to rename items.
 - **Icon data** is preserved but not decoded/re-encoded. Import a fresh
   icon with an external tool if you need to change art.
+- **Non-English strings** decode as latin-1 for editing. If your DAT
+  holds Shift-JIS or another codepage, the parser will still round-trip
+  those bytes byte-identically as long as you don't touch them, but
+  editing to a new Japanese name from the UI needs a follow-up.
 
 ## Install
 
@@ -80,9 +82,24 @@ touched; every other field on an item is kept as-is:
 ```json
 [
   { "id": 15001, "level": 75, "slot_names": ["HEAD"], "job_names": ["WAR", "PLD", "DRK"] },
-  { "id": 15002, "damage": 100, "delay": 240 }
+  { "id": 15002, "damage": 100, "delay": 240 },
+  {
+    "id": 15003,
+    "strings_block": {
+      "entries": [
+        { "text": "Void Crown" },
+        { "text": "void crown" },
+        { "text": "void crowns" },
+        { "text": "DEF: 99 Lv 1 All Jobs. A crown of dark energy." }
+      ]
+    }
+  }
 ]
 ```
+
+The `strings_block.entries` list must keep the same length as the item's
+existing entries — retail item records use a fixed slot count per item
+type and the client indexes into it. You can change the *text* freely.
 
 ## File and record layout
 
@@ -127,8 +144,29 @@ For `item_type == WEAPON` there are five more fields immediately after:
 | 0x2E   | 1    | skill    |
 | 0x2F   | 1    | jug_size |
 
-Everything after that (icon data, strings, scripts, padding) is
-preserved verbatim.
+After that comes the **strings block** (600 bytes for equipment, 592 for
+weapons) and then the icon (2432 bytes) plus padding out to `0xC00`. The
+strings block is a small `count / offset-table / entries` structure:
+
+    offset   size   field
+    0x00     4      count (number of entries)
+    0x04     4      header_flag (usually 0x00000001)
+    0x08     8*N    entries[N] of (u32 offset_from_block_start, u32 kind)
+
+    for kind == 0 (string):
+        u32 flag
+        u32 length
+        char data[length]
+        u8  NUL
+
+    for kind == 1 (integer):
+        u32 value
+
+Blocks that don't validate against this layout (e.g. non-item DAT
+records) are left untouched — the tool falls back to preserving the raw
+bytes so unknown formats round-trip byte-for-byte.
+
+The icon region is preserved verbatim; edit art with an external tool.
 
 ## Tests
 

@@ -43,13 +43,24 @@ import struct
 from dataclasses import dataclass, field, asdict
 from enum import IntEnum
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 from .cipher import decode_bytes, encode_bytes
 from .flags import Slot, Race, Job, bitmask_to_names, names_to_bitmask
+from .strings import (
+    EQUIPMENT_STRINGS_SIZE,
+    KIND_INTEGER,
+    KIND_STRING,
+    StringsBlock,
+    WEAPON_STRINGS_SIZE,
+)
 
 # 0xC00 - the retail record size for item_*.DAT files.
 RECORD_SIZE = 0xC00
+
+# The icon always sits at absolute offset 0x280 in an item record; that
+# offset is 0x258 into the ``tail`` buffer we keep on Item.
+_ICON_OFFSET_IN_TAIL = 0x258
 
 
 class ItemType(IntEnum):
@@ -129,13 +140,29 @@ class Item:
     # verbatim so unknown regions survive a round-trip untouched.
     tail: bytes = field(default=b"", repr=False)
 
-    # Best-effort preview strings pulled from the tail. Read-only for
-    # now; see extract_strings() below.
+    # Best-effort preview strings pulled from the tail as a
+    # last-resort fallback if we couldn't parse the structured strings
+    # block. See extract_strings() below.
     strings: list[str] = field(default_factory=list)
+
+    # Structured strings block (name, log names, description). Editable
+    # when ``strings_block.parsed`` is True; otherwise treated as opaque
+    # and passed through unchanged on save.
+    strings_block: Optional[StringsBlock] = None
 
     @property
     def is_weapon(self) -> bool:
         return self.item_type == int(ItemType.WEAPON)
+
+    @property
+    def _strings_offset_in_tail(self) -> int:
+        # Weapon records claim the first 8 bytes of tail for damage/
+        # delay/etc. before the strings block starts.
+        return _WEAPON_SIZE if self.is_weapon else 0
+
+    @property
+    def _strings_max_size(self) -> int:
+        return WEAPON_STRINGS_SIZE if self.is_weapon else EQUIPMENT_STRINGS_SIZE
 
     @property
     def slot_names(self) -> list[str]:
@@ -155,11 +182,38 @@ class Item:
 
     @property
     def name(self) -> str:
-        """Best guess at the display name (first ASCII-ish string)."""
+        """Best guess at the display name.
+
+        Prefers the first string in the structured strings block when
+        we successfully parsed one; falls back to the heuristic ASCII
+        extractor for records whose strings block we couldn't parse.
+        """
+        if self.strings_block and self.strings_block.parsed:
+            for entry in self.strings_block.entries:
+                if entry.kind == KIND_STRING and entry.text.strip():
+                    return entry.text.strip()
         for s in self.strings:
             if s.strip():
                 return s.strip()
         return f"item_{self.id}"
+
+    @property
+    def description(self) -> str:
+        """Best guess at the description text.
+
+        By retail convention, the description is one of the last string
+        entries in the block. We pick the longest string that contains a
+        space (heuristic: descriptions are sentences, log-names aren't).
+        """
+        if not (self.strings_block and self.strings_block.parsed):
+            return ""
+        best = ""
+        for entry in self.strings_block.entries:
+            if entry.kind != KIND_STRING:
+                continue
+            if " " in entry.text and len(entry.text) > len(best):
+                best = entry.text
+        return best
 
     # -- serialization -------------------------------------------------
 
@@ -195,6 +249,16 @@ class Item:
             item.dps = dps
             item.skill = skill
             item.jug_size = jug
+
+        # Parse the structured strings block if there's room for one.
+        strings_offset = item._strings_offset_in_tail
+        strings_size = item._strings_max_size
+        if len(item.tail) >= strings_offset + strings_size:
+            item.strings_block = StringsBlock.parse(
+                item.tail[strings_offset : strings_offset + strings_size],
+                max_size=strings_size,
+            )
+
         item.strings = extract_strings(item.tail)
         return item
 
@@ -242,6 +306,18 @@ class Item:
                 self.jug_size & 0xFF,
             )
 
+        # Splice the (possibly edited) strings block back over its slot
+        # in the tail. If we never parsed one, this is a no-op — the
+        # existing bytes were preserved verbatim.
+        if self.strings_block is not None:
+            strings_offset = self._strings_offset_in_tail
+            strings_size = self._strings_max_size
+            if len(tail) < strings_offset + strings_size:
+                tail.extend(b"\x00" * (strings_offset + strings_size - len(tail)))
+            tail[strings_offset : strings_offset + strings_size] = (
+                self.strings_block.serialize()
+            )
+
         record = header + bytes(tail)
         if len(record) < record_size:
             record += b"\x00" * (record_size - len(record))
@@ -259,7 +335,9 @@ class Item:
         d["job_names"] = self.job_names
         d["item_type_name"] = self.item_type_name
         d["name"] = self.name
+        d["description"] = self.description
         d["is_weapon"] = self.is_weapon
+        d["strings_block"] = self.strings_block.to_dict() if self.strings_block else None
         return d
 
     def apply_dict(self, patch: dict) -> None:
@@ -304,6 +382,10 @@ class Item:
             self.jobs = int(patch["jobs"])
         if "job_names" in patch:
             self.jobs = names_to_bitmask(patch["job_names"], Job)
+
+        # Strings block: nested edits go through StringsBlock.apply_dict.
+        if "strings_block" in patch and self.strings_block is not None and patch["strings_block"]:
+            self.strings_block.apply_dict(patch["strings_block"])
 
 
 def extract_strings(tail: bytes, min_len: int = 3) -> list[str]:

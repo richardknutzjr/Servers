@@ -96,7 +96,13 @@ def create_app(dat_path: Path, record_size: int, allow_in_place: bool) -> Flask:
         payload = request.get_json(silent=True) or {}
         with lock:
             idx = _find_index(item_id)
-            state["dat"].items[idx].apply_dict(payload)
+            try:
+                state["dat"].items[idx].apply_dict(payload)
+                # Trigger serialization once as a sanity check — catches
+                # strings-block overflow before it lands on disk.
+                state["dat"].items[idx].to_plain(state["dat"].record_size)
+            except ValueError as exc:
+                abort(400, description=str(exc))
             return jsonify(state["dat"].items[idx].to_dict())
 
     @app.post("/api/save")

@@ -170,6 +170,34 @@ button:hover:not(:disabled) { filter: brightness(1.05); }
 .status.ok { color: var(--ok); }
 .status.err { color: var(--danger); }
 
+.strings-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+.string-label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.string-label span {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.string-label input, .string-label textarea {
+    padding: 6px 8px;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font: inherit;
+    font-size: 13px;
+}
+.string-label textarea { resize: vertical; }
+
 .strings-preview {
     background: var(--panel-2);
     border: 1px solid var(--border);

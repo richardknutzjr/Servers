@@ -131,8 +131,11 @@ function renderEditor(item) {
         ])
     );
 
-    if (item.strings && item.strings.length) {
-        editor.appendChild(sectionTitle("Strings preview (read-only)"));
+    if (item.strings_block && item.strings_block.parsed) {
+        editor.appendChild(sectionTitle("Name & description"));
+        editor.appendChild(stringsEditor(item.strings_block));
+    } else if (item.strings && item.strings.length) {
+        editor.appendChild(sectionTitle("Strings preview (unparseable — read-only)"));
         const pre = document.createElement("div");
         pre.className = "strings-preview";
         pre.textContent = item.strings.join("\n");
@@ -181,6 +184,48 @@ function numField(item, key, label) {
     return l;
 }
 
+function stringsEditor(block) {
+    const wrap = document.createElement("div");
+    wrap.className = "strings-editor";
+    wrap.dataset.stringsField = "1";
+    const guessLabel = (i, e) => {
+        if (e.kind === 1) return `Value #${i}`;
+        // Retail slots by convention: 0=name, 1=singular log, 2=plural
+        // log, 3=article/pronoun, 4=description. Show the convention
+        // but don't enforce it — private servers reorder these.
+        return ["Name", "Log name (singular)", "Log name (plural)", "Article", "Description"][i] || `String #${i}`;
+    };
+    block.entries.forEach((entry, i) => {
+        const l = document.createElement("label");
+        l.className = "string-label";
+        const cap = document.createElement("span");
+        cap.textContent = guessLabel(i, entry);
+        l.appendChild(cap);
+        let input;
+        if (entry.kind === 1) {
+            input = document.createElement("input");
+            input.type = "number";
+            input.value = entry.value ?? 0;
+            input.dataset.kind = "integer";
+        } else if ((entry.text || "").length > 40) {
+            input = document.createElement("textarea");
+            input.rows = 3;
+            input.value = entry.text || "";
+            input.dataset.kind = "string";
+        } else {
+            input = document.createElement("input");
+            input.type = "text";
+            input.value = entry.text || "";
+            input.dataset.kind = "string";
+        }
+        input.dataset.index = String(i);
+        input.addEventListener("input", () => (state.dirty = true));
+        l.appendChild(input);
+        wrap.appendChild(l);
+    });
+    return wrap;
+}
+
 function checkboxGrid(item, namesKey, options) {
     const wrap = document.createElement("div");
     wrap.className = "checkbox-grid";
@@ -202,11 +247,25 @@ function checkboxGrid(item, namesKey, options) {
 function collectPatch() {
     const patch = {};
     for (const input of document.querySelectorAll("#editor input[type=number]")) {
+        if (!input.dataset.field) continue; // skip strings-editor inputs
         patch[input.dataset.field] = Number(input.value);
     }
     for (const grid of document.querySelectorAll("#editor .checkbox-grid")) {
         const key = grid.dataset.namesField;
         patch[key] = Array.from(grid.querySelectorAll("input:checked")).map((c) => c.value);
+    }
+    const stringsWrap = document.querySelector("#editor .strings-editor");
+    if (stringsWrap) {
+        const entries = [];
+        for (const el of stringsWrap.querySelectorAll("[data-index]")) {
+            const i = Number(el.dataset.index);
+            if (el.dataset.kind === "integer") {
+                entries[i] = { value: Number(el.value) };
+            } else {
+                entries[i] = { text: el.value };
+            }
+        }
+        patch.strings_block = { entries };
     }
     return patch;
 }
