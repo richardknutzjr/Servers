@@ -624,10 +624,11 @@ def create_app(state: EditorState) -> Flask:
             sql_note = _backup_and_write(sql_target, sql_bytes, backup_root)
             dat_note = _backup_and_write(dat_target, dat_bytes, backup_root)
             bat_note = _write_deploy_bat_if_missing(state.sql_dir)
+            lua_notes = _write_lua_stubs(edited, state.sql_dir, backup_root)
         except OSError as exc:
             abort(500, description=f"filesystem error: {exc}")
 
-        notes = [n for n in (source_note, sql_note, dat_note, bat_note) if n]
+        notes = [n for n in (source_note, sql_note, dat_note, bat_note, *lua_notes) if n]
         backup_created = backup_root.exists() and any(backup_root.iterdir())
         return jsonify(
             {
@@ -639,6 +640,31 @@ def create_app(state: EditorState) -> Flask:
                 "notes": notes,
             }
         )
+
+    def _write_lua_stubs(edited: list, sql_dir: Path, backup_root: Path) -> list[str]:
+        """Emit a Lua stub file for every edited item whose description
+        contains an effect that needs a script hook. Files land in
+        ``sql_dir / lua_stubs/`` so they're easy to copy into
+        ``scripts/globals/items/`` on the server."""
+        stub_dir = sql_dir / "lua_stubs"
+        stubs = lsb_export.emit_lua_stubs_for(edited)
+        if not stubs:
+            return []
+        stub_dir.mkdir(parents=True, exist_ok=True)
+        notes: list[str] = []
+        for filename, contents in stubs:
+            target = stub_dir / filename
+            if target.exists():
+                # Preserve prior version once so re-deploys don't
+                # trample hand-edited stubs.
+                backup_root.mkdir(parents=True, exist_ok=True)
+                (backup_root / f"overwritten_lua_{filename}").write_bytes(target.read_bytes())
+                notes.append(f"wrote {target} (prior version backed up)")
+            else:
+                notes.append(f"wrote Lua stub {target}")
+            target.write_text(contents, encoding="utf-8")
+        return notes
+
 
     def _write_deploy_bat_if_missing(sql_dir: Path) -> str:
         """Drop a template `deploy.bat` next to the SQL files the first
