@@ -351,10 +351,14 @@ async function openLocalPath(path) {
 
 async function scanFolder() {
     const path = document.getElementById("scan-path").value.trim();
-    if (!path) return;
     const scanStatus = document.getElementById("scan-status");
     const results = document.getElementById("scan-results");
     scanStatus.className = "status";
+    if (!path) {
+        scanStatus.textContent = "Type your FFXI install folder above first, then click Scan.";
+        scanStatus.classList.add("err");
+        return;
+    }
     scanStatus.textContent = `scanning ${path}… (this can take a minute for big install folders)`;
     results.innerHTML = "";
     try {
@@ -410,8 +414,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
 
     // Scan-folder wiring on the landing page.
+    const scanPath = document.getElementById("scan-path");
+    // On Windows, pre-fill with the standard install path so the user
+    // usually just has to click Scan. Empty on other OSes so they type.
+    const isWindows = /win/i.test(navigator.platform) || /windows/i.test(navigator.userAgent);
+    if (isWindows && !scanPath.value) {
+        scanPath.value = "C:\\Program Files (x86)\\PlayOnline\\SquareEnix\\FINAL FANTASY XI";
+    }
     document.getElementById("scan-btn").addEventListener("click", scanFolder);
-    document.getElementById("scan-path").addEventListener("keydown", (e) => {
+    scanPath.addEventListener("keydown", (e) => {
         if (e.key === "Enter") scanFolder();
     });
 

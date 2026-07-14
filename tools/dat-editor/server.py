@@ -98,6 +98,16 @@ def create_app(state: EditorState) -> Flask:
     # any custom-server DATs.
     app.config["MAX_CONTENT_LENGTH"] = 128 * 1024 * 1024
 
+    @app.after_request
+    def _no_cache(resp):
+        # Every launch of the .exe gets a fresh random port so URLs
+        # differ, but browsers still cache static assets aggressively
+        # by path. Disable caching so a redeployed .exe never boots
+        # into a UI made of stale JS/CSS from a previous install.
+        resp.headers["Cache-Control"] = "no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        return resp
+
     @app.get("/")
     def index():
         return render_template("index.html")
