@@ -47,6 +47,7 @@ async function loadStatus() {
     document.getElementById("filename").textContent = s.filename || "";
     document.getElementById("item-count").textContent = s.loaded ? `${s.item_count} items` : "";
     document.getElementById("download-btn").disabled = !s.loaded;
+    document.getElementById("export-sql-btn").disabled = !s.loaded;
     document.getElementById("landing").classList.toggle("hidden", s.loaded);
     document.getElementById("layout").classList.toggle("hidden", !s.loaded);
     return s;
@@ -509,6 +510,22 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("open-btn").addEventListener("click", () => fileInput.click());
     document.getElementById("download-btn").addEventListener("click", () => {
         window.location.href = "/api/download";
+    });
+    document.getElementById("export-sql-btn").addEventListener("click", async () => {
+        try {
+            const summary = await apiGet("/api/edited");
+            if (summary.count === 0) {
+                alert("No items have been edited yet. Apply changes to at least one item, then click Export SQL patch.");
+                return;
+            }
+            const preview = summary.items.slice(0, 8).map((i) => `#${i.id} ${i.name}`).join("\n");
+            const extra = summary.count > 8 ? `\n… and ${summary.count - 8} more` : "";
+            if (confirm(`Export SQL patch for ${summary.count} edited item(s)?\n\n${preview}${extra}`)) {
+                window.location.href = "/api/export-sql";
+            }
+        } catch (e) {
+            alert("export failed: " + e.message);
+        }
     });
 
     // Scan-folder wiring on the landing page.

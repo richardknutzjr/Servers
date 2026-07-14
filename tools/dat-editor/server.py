@@ -30,6 +30,7 @@ from werkzeug.utils import secure_filename
 from ffxidat import ItemDat, ItemType, Job, RECORD_SIZE, Race, Slot
 from ffxidat.cipher import decode_bytes
 from ffxidat.items import Item
+from ffxidat import lsb_export
 
 
 def _looks_like_mesh_dat(head: bytes) -> bool:
@@ -101,6 +102,12 @@ class EditorState:
         self.source_path: Path | None = dat_path
         self.filename: str = dat_path.name if dat_path else ""
         self.dat: ItemDat | None = ItemDat.load(dat_path, record_size=record_size) if dat_path else None
+        # Byte-level snapshot of each record as-loaded. Used to detect
+        # which items the user has edited so SQL export only emits
+        # rows for the ones that actually changed.
+        self.original_record_bytes: list[bytes] = (
+            [it.to_plain(self.record_size) for it in self.dat.items] if self.dat else []
+        )
         self.lock = threading.Lock()
 
     def load_from_bytes(self, filename: str, raw: bytes) -> None:
@@ -117,6 +124,9 @@ class EditorState:
             for i in range(0, len(raw), self.record_size)
         ]
         self.dat = ItemDat.from_records(records, record_size=self.record_size)
+        self.original_record_bytes = [
+            it.to_plain(self.record_size) for it in self.dat.items
+        ]
         self.filename = secure_filename(filename) or "item.DAT"
         # Uploaded DATs never overwrite the local path; force download.
         self.source_path = None
@@ -387,6 +397,53 @@ def create_app(state: EditorState) -> Flask:
             except ValueError as exc:
                 abort(400, description=str(exc))
             return jsonify(state.dat.items[idx].to_dict())
+
+    def _edited_items() -> list[Item]:
+        """Return every item whose bytes have changed since load."""
+        dat = _require_dat()
+        edited: list[Item] = []
+        for i, item in enumerate(dat.items):
+            current = item.to_plain(state.record_size)
+            original = (
+                state.original_record_bytes[i]
+                if i < len(state.original_record_bytes)
+                else None
+            )
+            if original is not None and current != original:
+                edited.append(item)
+        return edited
+
+    @app.get("/api/edited")
+    def list_edited():
+        """Return a lightweight list of every item that's been edited."""
+        edited = _edited_items()
+        return jsonify(
+            {
+                "count": len(edited),
+                "items": [
+                    {
+                        "id": it.id,
+                        "name": it.name,
+                        "item_type_name": it.item_type_name,
+                    }
+                    for it in edited
+                ],
+            }
+        )
+
+    @app.get("/api/export-sql")
+    def export_sql():
+        """Emit an LSB SQL patch for every edited item."""
+        edited = _edited_items()
+        sql = lsb_export.emit_patch(edited)
+        buf = io.BytesIO(sql.encode("utf-8"))
+        stem, _ = os.path.splitext(state.filename or "item.DAT")
+        return send_file(
+            buf,
+            as_attachment=True,
+            download_name=f"{stem}_lsb_patch.sql",
+            mimetype="text/sql",
+        )
 
     @app.get("/api/download")
     def download():
