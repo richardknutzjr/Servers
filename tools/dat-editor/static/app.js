@@ -332,6 +332,58 @@ async function openFile(file) {
     }
 }
 
+async function openLocalPath(path) {
+    const landingStatus = document.getElementById("landing-status");
+    landingStatus.className = "status";
+    landingStatus.textContent = `opening ${path}…`;
+    try {
+        await apiSend("POST", "/api/open-path", { path });
+        state.offset = 0;
+        state.selectedId = null;
+        await loadStatus();
+        await loadEnums();
+        await loadList();
+    } catch (e) {
+        landingStatus.textContent = "error: " + e.message;
+        landingStatus.classList.add("err");
+    }
+}
+
+async function scanFolder() {
+    const path = document.getElementById("scan-path").value.trim();
+    if (!path) return;
+    const scanStatus = document.getElementById("scan-status");
+    const results = document.getElementById("scan-results");
+    scanStatus.className = "status";
+    scanStatus.textContent = `scanning ${path}… (this can take a minute for big install folders)`;
+    results.innerHTML = "";
+    try {
+        const data = await apiSend("POST", "/api/scan", { path });
+        if (!data.results.length) {
+            scanStatus.textContent = `no item DATs found under ${data.root}. Double-check the folder path.`;
+            return;
+        }
+        scanStatus.textContent = `Found ${data.results.length} candidate item DAT${data.results.length === 1 ? "" : "s"}. Click one to open.`;
+        for (const r of data.results) {
+            const li = document.createElement("li");
+            li.innerHTML = `
+                <div>
+                    <div class="scan-path">${escapeHtml(r.path)}</div>
+                    <div class="scan-meta">
+                        example item: ${escapeHtml(r.sample_name)} · type ${escapeHtml(r.sample_type)}
+                    </div>
+                </div>
+                <div class="scan-meta">${r.size_mb} MB · ${r.records.toLocaleString()} items</div>
+            `;
+            li.addEventListener("click", () => openLocalPath(r.path));
+            results.appendChild(li);
+        }
+    } catch (e) {
+        scanStatus.textContent = "error: " + e.message;
+        scanStatus.classList.add("err");
+    }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
     // Landing / upload wiring.
     const fileInput = document.getElementById("file-input");
@@ -355,6 +407,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("open-btn").addEventListener("click", () => fileInput.click());
     document.getElementById("download-btn").addEventListener("click", () => {
         window.location.href = "/api/download";
+    });
+
+    // Scan-folder wiring on the landing page.
+    document.getElementById("scan-btn").addEventListener("click", scanFolder);
+    document.getElementById("scan-path").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") scanFolder();
     });
 
     document.getElementById("search").addEventListener("input", (e) => {

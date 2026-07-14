@@ -28,6 +28,8 @@ from flask import Flask, abort, jsonify, render_template, request, send_file, se
 from werkzeug.utils import secure_filename
 
 from ffxidat import ItemDat, ItemType, Job, RECORD_SIZE, Race, Slot
+from ffxidat.cipher import decode_bytes
+from ffxidat.items import Item
 
 
 def _flag_options(flag_cls) -> list[dict]:
@@ -91,8 +93,10 @@ def create_app(state: EditorState) -> Flask:
         template_folder=str(base / "templates"),
         static_folder=str(base / "static"),
     )
-    # 32 MB upload cap — a comfortable ceiling over any retail item DAT.
-    app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
+    # Retail item_armor.DAT is ~40 MB, item_weapon ~25 MB, item_general
+    # ~15 MB. 128 MB gives comfortable headroom for future patches and
+    # any custom-server DATs.
+    app.config["MAX_CONTENT_LENGTH"] = 128 * 1024 * 1024
 
     @app.get("/")
     def index():
@@ -124,6 +128,80 @@ def create_app(state: EditorState) -> Flask:
             except ValueError as exc:
                 abort(400, description=str(exc))
         return jsonify({"ok": True, "filename": state.filename, "items": len(state.dat.items)})
+
+    @app.post("/api/open-path")
+    def open_local_path():
+        """Load a DAT directly from a local filesystem path.
+
+        Only useful when the server runs on the user's own machine
+        (i.e. the .exe). It's still gated by having Flask bound to
+        127.0.0.1 so only local processes can reach it.
+        """
+        payload = request.get_json(silent=True) or {}
+        p = Path(str(payload.get("path", ""))).expanduser()
+        if not p.is_file():
+            abort(400, description=f"not a file: {p}")
+        with state.lock:
+            try:
+                state.load_from_bytes(p.name, p.read_bytes())
+            except ValueError as exc:
+                abort(400, description=str(exc))
+        return jsonify({"ok": True, "filename": state.filename, "items": len(state.dat.items), "path": str(p)})
+
+    @app.post("/api/scan")
+    def scan_folder():
+        """Walk a directory tree for candidate item DATs.
+
+        Returns files whose size is a multiple of the record size, is
+        larger than the "definitely not an item DAT" threshold, and
+        whose first record decodes into a plausible item header. Sorted
+        biggest-first because the interesting DATs are the big ones.
+        """
+        payload = request.get_json(silent=True) or {}
+        root = Path(str(payload.get("path", ""))).expanduser()
+        if not root.is_dir():
+            abort(400, description=f"not a directory: {root}")
+
+        MIN_SIZE = 512 * 1024  # 512 KB — retail item DATs are megabytes
+        MAX_RESULTS = 100
+        results = []
+        for p in root.rglob("*"):
+            if not p.is_file() or p.suffix.lower() != ".dat":
+                continue
+            try:
+                size = p.stat().st_size
+            except OSError:
+                continue
+            if size < MIN_SIZE or size % state.record_size != 0:
+                continue
+            try:
+                with p.open("rb") as fh:
+                    first = fh.read(state.record_size)
+                item = Item.from_plain(decode_bytes(first))
+            except Exception:
+                continue
+            # Heuristic: item IDs are 16-bit at retail, item type must
+            # be one we recognise. Rules out non-item DATs that happen
+            # to align on 3072-byte boundaries.
+            if item.item_type_name.startswith("UNKNOWN"):
+                continue
+            if not (1 <= item.id < 100000):
+                continue
+            results.append(
+                {
+                    "path": str(p),
+                    "size_bytes": size,
+                    "size_mb": round(size / (1024 * 1024), 1),
+                    "records": size // state.record_size,
+                    "sample_id": item.id,
+                    "sample_name": item.name,
+                    "sample_type": item.item_type_name,
+                }
+            )
+            if len(results) >= MAX_RESULTS:
+                break
+        results.sort(key=lambda r: r["size_bytes"], reverse=True)
+        return jsonify({"root": str(root), "results": results})
 
     def _require_dat() -> ItemDat:
         if state.dat is None:

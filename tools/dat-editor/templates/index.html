@@ -52,6 +52,23 @@
                 Click to choose, or drag a <code>.DAT</code> here
             </span>
         </label>
+
+        <div class="landing-divider"><span>or</span></div>
+
+        <div class="scan-section">
+            <p class="hint">
+                Don't know which file to pick? Point me at your FFXI
+                install folder and I'll scan it for item DATs.
+            </p>
+            <div class="scan-row">
+                <input id="scan-path" type="text"
+                       placeholder="C:\Program Files (x86)\PlayOnline\SquareEnix\FINAL FANTASY XI">
+                <button id="scan-btn">Scan for item DATs</button>
+            </div>
+            <p id="scan-status" class="status"></p>
+            <ul id="scan-results" class="scan-results"></ul>
+        </div>
+
         <p id="landing-status" class="status"></p>
     </div>
 </section>
