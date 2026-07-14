@@ -354,6 +354,26 @@ def create_app(state: EditorState) -> Flask:
         idx = _find_index(item_id)
         return jsonify(state.dat.items[idx].to_dict())
 
+    @app.get("/api/items/<int:item_id>/raw")
+    def get_item_raw(item_id: int):
+        """Return the raw plaintext bytes of the item's record as hex.
+
+        Debug-only endpoint used to reverse-engineer field layouts for
+        DAT variants the parser doesn't understand yet.
+        """
+        idx = _find_index(item_id)
+        item = state.dat.items[idx]
+        plain = item.to_plain(state.dat.record_size)
+        return jsonify(
+            {
+                "id": item.id,
+                "record_index": idx,
+                "record_size": len(plain),
+                "hex_header_128": plain[:128].hex(),
+                "hex_first_512": plain[:512].hex(),
+            }
+        )
+
     @app.put("/api/items/<int:item_id>")
     def put_item(item_id: int):
         payload = request.get_json(silent=True) or {}

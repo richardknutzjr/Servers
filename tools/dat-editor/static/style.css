@@ -172,6 +172,40 @@ button:hover:not(:disabled) { filter: brightness(1.05); }
 .status.ok { color: var(--ok); }
 .status.err { color: var(--danger); }
 
+.raw-bytes {
+    margin-top: 16px;
+    padding: 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+}
+.raw-bytes .hex-line {
+    white-space: pre;
+    color: var(--text);
+    line-height: 1.35;
+    overflow-x: auto;
+}
+.raw-bytes button {
+    margin-top: 10px;
+}
+.raw-hex-full {
+    display: block;
+    margin-top: 8px;
+    width: 100%;
+    min-height: 100px;
+    background: var(--bg);
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px;
+    font: inherit;
+    font-size: 11px;
+    resize: vertical;
+    word-break: break-all;
+}
+
 .strings-editor {
     display: flex;
     flex-direction: column;

@@ -193,11 +193,67 @@ function renderEditor(item) {
     revertBtn.className = "secondary";
     revertBtn.textContent = "Revert";
     revertBtn.addEventListener("click", () => selectItem(item.id));
+    const rawBtn = document.createElement("button");
+    rawBtn.className = "secondary";
+    rawBtn.textContent = "Show raw bytes";
+    rawBtn.addEventListener("click", () => toggleRawBytes(item.id));
     const status = document.createElement("span");
     status.id = "edit-status";
     status.className = "status";
-    actions.append(applyBtn, revertBtn, status);
+    actions.append(applyBtn, revertBtn, rawBtn, status);
     editor.appendChild(actions);
+
+    // Placeholder for the hex-dump panel — populated on demand.
+    const raw = document.createElement("div");
+    raw.id = "raw-bytes";
+    raw.className = "raw-bytes hidden";
+    editor.appendChild(raw);
+}
+
+async function toggleRawBytes(itemId) {
+    const panel = document.getElementById("raw-bytes");
+    if (!panel) return;
+    if (!panel.classList.contains("hidden") && panel.dataset.itemId === String(itemId)) {
+        panel.classList.add("hidden");
+        return;
+    }
+    panel.dataset.itemId = String(itemId);
+    panel.classList.remove("hidden");
+    panel.textContent = "loading…";
+    try {
+        const data = await apiGet(`/api/items/${itemId}/raw`);
+        panel.innerHTML = `
+            <div class="section-title">Raw plaintext bytes — first 128 (share this for layout help)</div>
+            <div class="hex-line">${formatHex(data.hex_header_128)}</div>
+            <button class="secondary" id="copy-hex-btn">Copy full 512-byte hex</button>
+            <span id="copy-hex-status" class="status"></span>
+            <textarea id="raw-hex-full" class="raw-hex-full" readonly>${data.hex_first_512}</textarea>
+        `;
+        document.getElementById("copy-hex-btn").addEventListener("click", async () => {
+            try {
+                await navigator.clipboard.writeText(data.hex_first_512);
+                const s = document.getElementById("copy-hex-status");
+                s.textContent = "copied";
+                s.className = "status ok";
+            } catch (e) {
+                document.getElementById("raw-hex-full").select();
+            }
+        });
+    } catch (e) {
+        panel.textContent = "error: " + e.message;
+    }
+}
+
+// Format a long hex string into rows of 32 hex chars (16 bytes) with
+// an offset gutter — easier to eyeball fields.
+function formatHex(hex) {
+    const rows = [];
+    for (let i = 0; i < hex.length; i += 32) {
+        const off = (i / 2).toString(16).padStart(4, "0").toUpperCase();
+        const chunk = hex.slice(i, i + 32).toUpperCase().match(/.{2}/g).join(" ");
+        rows.push(`${off}  ${chunk}`);
+    }
+    return rows.join("\n");
 }
 
 function sectionTitle(text) {
