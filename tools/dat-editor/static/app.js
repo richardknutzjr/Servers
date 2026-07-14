@@ -542,6 +542,18 @@ document.addEventListener("DOMContentLoaded", async () => {
                 );
                 return;
             }
+            // Prompt for the DAT subpath under dat_dir. Auto-detected
+            // default is shown; the user can correct it if wrong
+            // (e.g. flat-deployed source gave just the filename).
+            const defaultSubpath = cfg.dat_subpath_default || "";
+            const subpathPrompt =
+                `Deploy target under ${cfg.dat_dir}\\\n\n` +
+                `Auto-detected: ${defaultSubpath || "(bare filename)"}\n\n` +
+                `Type the correct subpath (e.g. 286\\73.DAT), or press OK to accept:`;
+            const chosenSubpath = prompt(subpathPrompt, defaultSubpath);
+            if (chosenSubpath === null) return; // cancelled
+
+            const resolvedTarget = `${cfg.dat_dir}\\${chosenSubpath}`;
             const preview = summary.count
                 ? summary.items.slice(0, 6).map((i) => `#${i.id} ${i.name}`).join("\n")
                 : "(no items edited — will still write the DAT byte-identically for backup purposes)";
@@ -549,10 +561,14 @@ document.addEventListener("DOMContentLoaded", async () => {
             const confirmMsg =
                 `Deploy ${summary.count} edited item(s)?\n\n${preview}${extra}\n\n` +
                 `SQL  → ${cfg.sql_dir}\n` +
-                `DAT  → ${cfg.dat_target}\n` +
-                `Backup any overwritten files under ${cfg.backup_dir}\\<timestamp>\\`;
+                `DAT  → ${resolvedTarget}\n` +
+                `Any existing file at that path will be renamed to <name>_backup_<timestamp>.<ext> in place.`;
             if (!confirm(confirmMsg)) return;
-            const r = await fetch("/api/deploy", { method: "POST" });
+            const r = await fetch("/api/deploy", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ dat_subpath: chosenSubpath }),
+            });
             if (!r.ok) {
                 alert("deploy failed: " + r.status + " " + await r.text());
                 return;
@@ -560,9 +576,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             const body = await r.json();
             let resultMsg = `Deployed ${body.edited_count} edited item(s).\n\n` + body.notes.join("\n");
             if (body.backup_root) {
-                resultMsg += `\n\nBackup: ${body.backup_root}`;
-            } else {
-                resultMsg += "\n\n(nothing to back up — first-time deploy at these paths, no source file known)";
+                resultMsg += `\n\nSource-snapshot backup: ${body.backup_root}`;
             }
             alert(resultMsg);
         } catch (e) {

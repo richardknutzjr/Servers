@@ -518,31 +518,52 @@ def create_app(state: EditorState) -> Flask:
     @app.get("/api/deploy/config")
     def deploy_config():
         """Report the configured deploy paths back to the UI."""
+        # Also expose the DAT subpath the tool auto-detected so the UI
+        # can show it as an editable default in the deploy dialog.
+        target = _dat_target_path()
+        subpath_default = None
+        if target and state.dat_dir:
+            try:
+                subpath_default = str(target.relative_to(state.dat_dir))
+            except ValueError:
+                subpath_default = target.name
         return jsonify(
             {
                 "sql_dir": str(state.sql_dir) if state.sql_dir else None,
                 "dat_dir": str(state.dat_dir) if state.dat_dir else None,
                 "backup_dir": str(state.backup_dir) if state.backup_dir else None,
                 "source_path": str(state.source_path) if state.source_path else None,
-                "dat_target": str(_dat_target_path()) if state.dat_dir else None,
+                "dat_target": str(target) if target else None,
+                "dat_subpath_default": subpath_default,
             }
         )
 
-    def _dat_target_path() -> Path | None:
+    def _dat_target_path(override: str | None = None) -> Path | None:
         """Where the edited DAT will land under dat_dir.
 
         Resolves the target subpath in this order:
+          0. If ``override`` is provided (from the deploy dialog), use
+             it verbatim relative to ``dat_dir``.
           1. If the source path contains a ``ROM`` segment (case-
-             insensitive), use everything after it. e.g.
-             ``C:\\...\\FFXI\\ROM\\286\\73.DAT`` -> ``286\\73.DAT``.
-          2. Fallback: use the source path's parent-folder + filename.
-             So a source at ``D:\\wherever\\286\\73.DAT`` still lands
-             at ``<dat_dir>\\286\\73.DAT``.
-          3. Last resort (upload, no source path): bare filename.
+             insensitive) followed by a subfolder, use everything after
+             it. e.g. ``C:\\...\\FFXI\\ROM\\286\\73.DAT`` -> ``286\\73.DAT``.
+          2. If the source path's immediate parent isn't ``ROM``, use
+             ``<parent>\\<filename>`` (source at ``D:\\wherever\\286\\73.DAT``
+             -> ``286\\73.DAT``).
+          3. Look inside ``dat_dir`` for an existing copy of this
+             filename inside a numbered subfolder. If it exists in
+             exactly one, deploy there (this rescues cases where a
+             previous flat deploy created ``ROM\\73.DAT`` but the
+             correct home is ``ROM\\286\\73.DAT``).
+          4. Last resort: bare filename at ``dat_dir`` root.
         """
         if state.dat_dir is None:
             return None
-        subpath = Path(state.filename or "item.DAT")
+        if override:
+            return state.dat_dir / Path(override)
+
+        filename = state.filename or "item.DAT"
+        subpath: Path = Path(filename)
         src = state.source_path
         if src is not None:
             parts = list(src.parts)
@@ -551,10 +572,33 @@ def create_app(state: EditorState) -> Flask:
                 if part.upper() == "ROM":
                     found_rom_idx = i
                     break
-            if found_rom_idx is not None and found_rom_idx + 1 < len(parts):
+            if (
+                found_rom_idx is not None
+                and found_rom_idx + 2 <= len(parts) - 1
+            ):
+                # ROM has a subfolder before the file — perfect.
                 subpath = Path(*parts[found_rom_idx + 1 :])
-            elif len(parts) >= 2:
-                subpath = Path(parts[-2], parts[-1])
+            elif src.parent.name.isdigit():
+                # No ROM segment, but the parent is a numbered folder
+                # (FFXI's ROM subfolder convention). Use it.
+                subpath = Path(src.parent.name, src.name)
+
+        # If we still ended up with a bare filename, look for the file
+        # inside a numbered subfolder of dat_dir. If exactly one match,
+        # use it — this recovers a bad prior deploy.
+        if subpath == Path(filename) and state.dat_dir.exists():
+            matches: list[Path] = []
+            try:
+                for entry in state.dat_dir.iterdir():
+                    if entry.is_dir() and entry.name.isdigit():
+                        candidate = entry / filename
+                        if candidate.exists():
+                            matches.append(entry)
+            except OSError:
+                pass
+            if len(matches) == 1:
+                subpath = Path(matches[0].name, filename)
+
         return state.dat_dir / subpath
 
     def _timestamped_backup_dir() -> Path:
@@ -624,6 +668,9 @@ def create_app(state: EditorState) -> Flask:
                 ),
             )
 
+        payload = request.get_json(silent=True) or {}
+        dat_subpath_override = (payload.get("dat_subpath") or "").strip() or None
+
         edited = _edited_items()
 
         with state.lock:
@@ -634,7 +681,7 @@ def create_app(state: EditorState) -> Flask:
 
         stem, ext = os.path.splitext(state.filename or "item.DAT")
         sql_target = state.sql_dir / f"{stem}_lsb_patch.sql"
-        dat_target = _dat_target_path()
+        dat_target = _dat_target_path(dat_subpath_override)
         assert dat_target is not None  # dat_dir is set, so this is fine
 
         try:
