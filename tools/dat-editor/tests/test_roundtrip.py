@@ -7,9 +7,9 @@ that every field survives unchanged.
 
 from __future__ import annotations
 
-import os
 import struct
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -146,8 +146,12 @@ class FileTests(unittest.TestCase):
         records = [make_armor(item_id=i) for i in (30001, 30002, 30003)]
         raw = b"".join(encode_bytes(r) for r in records)
 
-        tmp = Path(os.environ.get("PYTEST_TMPDIR", "/tmp")) / "ffxidat-test.DAT"
-        tmp.write_bytes(raw)
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td) / "ffxidat-test.DAT"
+            tmp.write_bytes(raw)
+            self._run_load_and_save(tmp, records)
+
+    def _run_load_and_save(self, tmp, records):
 
         dat = ItemDat.load(tmp)
         self.assertEqual(len(dat.items), 3)
