@@ -861,12 +861,16 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # Deploy paths — SQL, DAT, and backup destinations for the
-    # "Deploy edits" button. Defaults match the operator's typical
-    # server-relaunch layout under D:\; every one can be overridden
-    # via CLI arg or the matching DAT_EDITOR_*_DIR env var.
+    # "Deploy edits" button. Defaults live under a dedicated
+    # ``dat-editor-output\`` folder that ximap doesn't scan, so
+    # generated deploy.bat / lua_stubs / *_lsb_patch.sql never get
+    # auto-loaded by the server as modules. The DAT still deploys to
+    # the operator's existing ``Custom DATs\...\ROM\`` staging area
+    # where their own install BAT picks it up. Override any of these
+    # via CLI arg or DAT_EDITOR_*_DIR env var.
     default_sql_dir = os.environ.get(
         "DAT_EDITOR_SQL_DIR",
-        r"D:\server_relaunch\modules\custom\sql",
+        r"D:\server_relaunch\dat-editor-output",
     )
     default_dat_dir = os.environ.get(
         "DAT_EDITOR_DAT_DIR",
@@ -874,7 +878,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     default_backup_dir = os.environ.get(
         "DAT_EDITOR_BACKUP_DIR",
-        r"D:\server_relaunch\modules\backupdatsqls",
+        r"D:\server_relaunch\dat-editor-output\backup",
     )
     parser.add_argument(
         "--sql-dir",
