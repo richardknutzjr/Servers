@@ -1,0 +1,78 @@
+name: Build DAT Editor .exe
+
+on:
+  push:
+    branches:
+      - main
+      - claude/**
+    paths:
+      - "tools/dat-editor/**"
+      - ".github/workflows/build-dat-editor-exe.yml"
+  pull_request:
+    paths:
+      - "tools/dat-editor/**"
+      - ".github/workflows/build-dat-editor-exe.yml"
+  release:
+    types: [published]
+  workflow_dispatch: {}
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: tools/dat-editor
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: tools/dat-editor/requirements-build.txt
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-build.txt
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Build .exe
+        run: pyinstaller --clean --noconfirm ffxi-dat-editor.spec
+
+      - name: Smoke test the built .exe
+        shell: pwsh
+        run: |
+          $exe = "dist\ffxi-dat-editor.exe"
+          if (-not (Test-Path $exe)) {
+            Write-Error "expected $exe to exist"; exit 1
+          }
+          # Start it, hit /api/status, kill it. Confirms it boots and
+          # serves without a preloaded DAT.
+          $proc = Start-Process -FilePath $exe -ArgumentList @("--port","5199","--no-browser") -PassThru
+          try {
+            Start-Sleep -Seconds 4
+            $r = Invoke-WebRequest -Uri "http://127.0.0.1:5199/api/status" -UseBasicParsing
+            if ($r.StatusCode -ne 200) {
+              Write-Error "unexpected status $($r.StatusCode)"; exit 1
+            }
+            Write-Host "smoke test OK: $($r.Content)"
+          }
+          finally {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffxi-dat-editor-windows
+          path: tools/dat-editor/dist/ffxi-dat-editor.exe
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: tools/dat-editor/dist/ffxi-dat-editor.exe

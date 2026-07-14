@@ -5,9 +5,31 @@ server operators who want to author custom gear for their relaunch.
 
 It reads the retail 0xC00-byte item records (rotation-decoded), lets you
 tweak the fields that matter for gear (item type, level, slots, jobs,
-races, weapon damage/delay, etc.), and writes them back out. Bytes we
-don't understand are preserved verbatim, so unknown regions of a record
-survive a round-trip untouched.
+races, weapon damage/delay, name, description, etc.), and writes them
+back out. Bytes we don't understand are preserved verbatim, so unknown
+regions of a record survive a round-trip untouched.
+
+## Quickest way to use it (Windows)
+
+1. Download **`ffxi-dat-editor.exe`** from the latest release, or grab
+   it from the *Build DAT Editor .exe* workflow artifacts on a recent
+   commit of this repo.
+2. **Double-click it.** A console window appears and your default
+   browser opens the editor automatically.
+3. Click **"Open DAT…"** (or drag a `.DAT` onto the drop zone) and
+   pick the item file you want to edit — e.g. `ROM/xxx/item_armor.DAT`
+   from your FFXI install. **Back it up first** by copying it to a safe
+   folder.
+4. Edit whatever you want on the right — name, description, slots,
+   jobs, stats. Click **Apply changes** after each item.
+5. Click **"Download edited DAT"** in the top-right. Your browser saves
+   the modified file to your Downloads folder as
+   `item_armor_edited.DAT`.
+6. Drop that file into your `ROM` folder in place of the original.
+7. Close the console window when you're done — that shuts the editor
+   down.
+
+The .exe is self-contained. No Python install required.
 
 ## What it can edit
 
@@ -36,16 +58,26 @@ For each item you can change:
   those bytes byte-identically as long as you don't touch them, but
   editing to a new Japanese name from the UI needs a follow-up.
 
-## Install
+## Running from source (macOS / Linux / dev on Windows)
 
 ```
 python3 -m pip install -r requirements.txt
+./server.py
 ```
 
-Python 3.10+; the only runtime dependency is Flask (for the web UI).
-The CLI has no runtime deps beyond the standard library.
+That prints a `http://127.0.0.1:<port>` URL and opens your default
+browser. Pick a DAT with **Open DAT…** and edit as above.
 
-## Workflow
+Python 3.10+; runtime dependency is Flask. The CLI has no runtime deps
+beyond the standard library.
+
+Development conveniences:
+
+```
+./server.py --path /path/to/item_armor.DAT   # preload a DAT
+./server.py --port 5000 --no-browser         # pinned port, no browser
+./server.py --allow-in-place --path X.DAT    # let /api/save overwrite X
+```
 
 Always keep an untouched backup of your DAT before editing:
 
@@ -53,15 +85,17 @@ Always keep an untouched backup of your DAT before editing:
 cp /path/to/ROM/xxx/xxx.DAT ~/dat-backups/
 ```
 
-Then either browse and edit visually:
+## Building the Windows .exe yourself
+
+The CI job in `.github/workflows/build-dat-editor-exe.yml` runs this on
+every push and uploads the .exe as a workflow artifact. To build
+locally on Windows:
 
 ```
-./server.py /path/to/item_armor.DAT
-# then open http://127.0.0.1:5000
+python -m pip install -r requirements-build.txt
+pyinstaller --clean --noconfirm ffxi-dat-editor.spec
+# result: dist\ffxi-dat-editor.exe
 ```
-
-The web UI writes to a target path you choose (safer default). If you
-want to overwrite the source file directly, pass `--allow-in-place`.
 
 Or dump and patch from the shell:
 

@@ -43,6 +43,8 @@ body {
     vertical-align: middle;
 }
 
+.hidden { display: none !important; }
+
 .layout {
     display: grid;
     grid-template-columns: 320px 1fr;
@@ -210,6 +212,65 @@ button:hover:not(:disabled) { filter: brightness(1.05); }
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
     font-size: 12px;
     color: var(--muted);
+}
+
+.landing {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: calc(100vh - 48px);
+    padding: 32px;
+}
+.landing-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 32px 40px;
+    width: min(560px, 95vw);
+    text-align: center;
+}
+.landing-card h1 { margin-top: 0; font-size: 22px; }
+.landing-card p { color: var(--muted); }
+.landing-card code {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    background: var(--panel-2);
+    padding: 1px 6px;
+    border-radius: 3px;
+    color: var(--text);
+}
+.file-drop {
+    display: block;
+    margin: 24px auto 12px;
+    padding: 40px 20px;
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.1s, border-color 0.1s;
+}
+.file-drop input { display: none; }
+.file-drop-inner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--muted);
+    font-size: 14px;
+}
+.file-drop-icon {
+    display: inline-flex;
+    width: 32px; height: 32px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--accent);
+    font-size: 20px;
+    font-weight: bold;
+}
+.file-drop:hover, .file-drop.drag-over {
+    background: var(--panel-2);
+    border-color: var(--accent);
 }
 
 .modal.hidden { display: none; }

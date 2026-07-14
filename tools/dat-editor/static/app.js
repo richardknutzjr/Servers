@@ -8,6 +8,8 @@ const state = {
     selectedId: null,
     enums: null,
     dirty: false,
+    loaded: false,
+    filename: "",
 };
 
 async function apiGet(path) {
@@ -25,11 +27,33 @@ async function apiSend(method, path, body) {
     return r.json();
 }
 
+async function apiUpload(file) {
+    const form = new FormData();
+    form.append("file", file);
+    const r = await fetch("/api/open", { method: "POST", body: form });
+    if (!r.ok) throw new Error(`upload failed: ${r.status} ${await r.text()}`);
+    return r.json();
+}
+
 async function loadEnums() {
+    if (state.enums) return;
     state.enums = await apiGet("/api/enums");
 }
 
+async function loadStatus() {
+    const s = await apiGet("/api/status");
+    state.loaded = s.loaded;
+    state.filename = s.filename || "";
+    document.getElementById("filename").textContent = s.filename || "";
+    document.getElementById("item-count").textContent = s.loaded ? `${s.item_count} items` : "";
+    document.getElementById("download-btn").disabled = !s.loaded;
+    document.getElementById("landing").classList.toggle("hidden", s.loaded);
+    document.getElementById("layout").classList.toggle("hidden", !s.loaded);
+    return s;
+}
+
 async function loadList() {
+    if (!state.loaded) return;
     const params = new URLSearchParams({
         offset: state.offset,
         limit: state.limit,
@@ -168,7 +192,7 @@ function sectionTitle(text) {
 function fieldGrid(fields) {
     const wrap = document.createElement("div");
     wrap.className = "field-grid";
-    for (const field of fields) wrap.appendChild(field);
+    for (const f of fields) wrap.appendChild(f);
     return wrap;
 }
 
@@ -190,9 +214,6 @@ function stringsEditor(block) {
     wrap.dataset.stringsField = "1";
     const guessLabel = (i, e) => {
         if (e.kind === 1) return `Value #${i}`;
-        // Retail slots by convention: 0=name, 1=singular log, 2=plural
-        // log, 3=article/pronoun, 4=description. Show the convention
-        // but don't enforce it — private servers reorder these.
         return ["Name", "Log name (singular)", "Log name (plural)", "Article", "Description"][i] || `String #${i}`;
     };
     block.entries.forEach((entry, i) => {
@@ -247,7 +268,7 @@ function checkboxGrid(item, namesKey, options) {
 function collectPatch() {
     const patch = {};
     for (const input of document.querySelectorAll("#editor input[type=number]")) {
-        if (!input.dataset.field) continue; // skip strings-editor inputs
+        if (!input.dataset.field) continue;
         patch[input.dataset.field] = Number(input.value);
     }
     for (const grid of document.querySelectorAll("#editor .checkbox-grid")) {
@@ -278,7 +299,7 @@ async function applyEdits(itemId) {
     try {
         await apiSend("PUT", `/api/items/${itemId}`, patch);
         state.dirty = false;
-        status.textContent = "applied (in memory — remember to Save)";
+        status.textContent = "applied — click Download when done";
         status.classList.add("ok");
         await loadList();
     } catch (e) {
@@ -293,34 +314,48 @@ function escapeHtml(s) {
     }[c]));
 }
 
-// Save dialog wiring.
-function openSaveDialog() {
-    document.getElementById("save-dialog").classList.remove("hidden");
-    document.getElementById("save-status").textContent = "";
-    document.getElementById("save-status").className = "status";
-}
-function closeSaveDialog() {
-    document.getElementById("save-dialog").classList.add("hidden");
-}
-async function confirmSave() {
-    const path = document.getElementById("save-path").value.trim();
-    const status = document.getElementById("save-status");
-    status.className = "status";
-    status.textContent = "saving…";
+async function openFile(file) {
+    if (!file) return;
+    const landingStatus = document.getElementById("landing-status");
+    landingStatus.className = "status";
+    landingStatus.textContent = `opening ${file.name}…`;
     try {
-        const r = await apiSend("POST", "/api/save", { path });
-        status.textContent = "saved to " + r.saved_to;
-        status.classList.add("ok");
+        await apiUpload(file);
+        state.offset = 0;
+        state.selectedId = null;
+        await loadStatus();
+        await loadEnums();
+        await loadList();
     } catch (e) {
-        status.textContent = e.message;
-        status.classList.add("err");
+        landingStatus.textContent = "error: " + e.message;
+        landingStatus.classList.add("err");
     }
 }
 
-// Wire top-level controls once the DOM is ready.
 document.addEventListener("DOMContentLoaded", async () => {
-    await loadEnums();
-    await loadList();
+    // Landing / upload wiring.
+    const fileInput = document.getElementById("file-input");
+    const drop = document.getElementById("file-drop");
+    fileInput.addEventListener("change", (e) => openFile(e.target.files[0]));
+    ["dragover", "dragenter"].forEach((ev) =>
+        drop.addEventListener(ev, (e) => {
+            e.preventDefault();
+            drop.classList.add("drag-over");
+        })
+    );
+    ["dragleave", "drop"].forEach((ev) =>
+        drop.addEventListener(ev, () => drop.classList.remove("drag-over"))
+    );
+    drop.addEventListener("drop", (e) => {
+        e.preventDefault();
+        const f = e.dataTransfer?.files?.[0];
+        if (f) openFile(f);
+    });
+
+    document.getElementById("open-btn").addEventListener("click", () => fileInput.click());
+    document.getElementById("download-btn").addEventListener("click", () => {
+        window.location.href = "/api/download";
+    });
 
     document.getElementById("search").addEventListener("input", (e) => {
         state.query = e.target.value;
@@ -336,7 +371,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         loadList();
     });
 
-    document.getElementById("save-btn").addEventListener("click", openSaveDialog);
-    document.getElementById("save-cancel").addEventListener("click", closeSaveDialog);
-    document.getElementById("save-confirm").addEventListener("click", confirmSave);
+    // If a DAT was preloaded via --path, jump straight to the editor.
+    const s = await loadStatus();
+    if (s.loaded) {
+        await loadEnums();
+        await loadList();
+    }
 });

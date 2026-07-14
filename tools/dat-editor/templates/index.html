@@ -10,24 +10,25 @@
 <header class="top-bar">
     <div class="title">
         <strong>FFXI DAT Editor</strong>
-        <span class="path" title="{{ dat_path }}">{{ dat_path }}</span>
+        <span id="filename" class="path"></span>
     </div>
     <div class="counts">
-        <span>{{ item_count }} items</span>
-        <button id="save-btn">Save…</button>
+        <span id="item-count"></span>
+        <button id="open-btn" class="secondary">Open DAT…</button>
+        <button id="download-btn" disabled>Download edited DAT</button>
     </div>
 </header>
 
-<main class="layout">
+<main id="layout" class="layout hidden">
     <aside class="sidebar">
         <div class="search-box">
             <input id="search" type="text" placeholder="Search by id or name…">
         </div>
         <ul id="item-list" class="item-list"></ul>
         <div class="pager">
-            <button id="prev-page">&lsaquo; Prev</button>
+            <button id="prev-page" class="secondary">&lsaquo; Prev</button>
             <span id="page-info">–</span>
-            <button id="next-page">Next &rsaquo;</button>
+            <button id="next-page" class="secondary">Next &rsaquo;</button>
         </div>
     </aside>
     <section id="editor" class="editor">
@@ -35,28 +36,26 @@
     </section>
 </main>
 
-<div id="save-dialog" class="modal hidden">
-    <div class="modal-card">
-        <h3>Save DAT</h3>
-        <p>Write the current edits to a DAT file.</p>
-        <label>
-            Output path
-            <input id="save-path" type="text" placeholder="/path/to/output.DAT">
+<section id="landing" class="landing">
+    <div class="landing-card">
+        <h1>Open a DAT to start editing</h1>
+        <p>Pick an item DAT file from your FFXI installation
+           (e.g. <code>ROM/…/item_armor.DAT</code>). The tool works in
+           memory — you'll download the edited copy when you're done.</p>
+        <p><strong>Back up your DAT first.</strong> Drop the original
+           somewhere safe before overwriting anything in your game
+           folder.</p>
+        <label id="file-drop" class="file-drop">
+            <input id="file-input" type="file" accept=".DAT,.dat">
+            <span class="file-drop-inner">
+                <span class="file-drop-icon">+</span>
+                Click to choose, or drag a <code>.DAT</code> here
+            </span>
         </label>
-        {% if allow_in_place %}
-        <p class="warn">In-place save is <strong>enabled</strong> — leaving the path blank will overwrite the source DAT.</p>
-        {% else %}
-        <p class="hint">In-place save is disabled. Give an output path so the source DAT is not overwritten.</p>
-        {% endif %}
-        <div class="modal-actions">
-            <button id="save-cancel" class="secondary">Cancel</button>
-            <button id="save-confirm">Save</button>
-        </div>
-        <p id="save-status" class="status"></p>
+        <p id="landing-status" class="status"></p>
     </div>
-</div>
+</section>
 
-<script>window.__ALLOW_IN_PLACE__ = {{ 'true' if allow_in_place else 'false' }};</script>
 <script src="/static/app.js"></script>
 </body>
 </html>
