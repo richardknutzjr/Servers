@@ -5,6 +5,8 @@ on:
     branches:
       - main
       - claude/**
+    tags:
+      - "v*"
     paths:
       - "tools/dat-editor/**"
       - ".github/workflows/build-dat-editor-exe.yml"
@@ -19,6 +21,8 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
+    permissions:
+      contents: write  # needed so the "Attach to release" step can create/edit a release
     defaults:
       run:
         working-directory: tools/dat-editor
@@ -72,7 +76,12 @@ jobs:
           if-no-files-found: error
 
       - name: Attach to release
-        if: github.event_name == 'release'
+        # Fire when a release is manually published, or when a tag like
+        # v0.1.0 is pushed. In the tag case action-gh-release creates
+        # the release for us if none exists for that tag yet.
+        if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: tools/dat-editor/dist/ffxi-dat-editor.exe
+          draft: false
+          generate_release_notes: true
