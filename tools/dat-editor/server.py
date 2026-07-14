@@ -531,11 +531,14 @@ def create_app(state: EditorState) -> Flask:
     def _dat_target_path() -> Path | None:
         """Where the edited DAT will land under dat_dir.
 
-        If the current DAT was loaded from a path containing a ``ROM``
-        segment, preserve everything after that segment. So a source
-        at ``C:\\...\\FFXI\\ROM\\286\\73.DAT`` lands at
-        ``<dat_dir>\\286\\73.DAT``. Otherwise fall back to
-        ``<dat_dir>\\<filename>``.
+        Resolves the target subpath in this order:
+          1. If the source path contains a ``ROM`` segment (case-
+             insensitive), use everything after it. e.g.
+             ``C:\\...\\FFXI\\ROM\\286\\73.DAT`` -> ``286\\73.DAT``.
+          2. Fallback: use the source path's parent-folder + filename.
+             So a source at ``D:\\wherever\\286\\73.DAT`` still lands
+             at ``<dat_dir>\\286\\73.DAT``.
+          3. Last resort (upload, no source path): bare filename.
         """
         if state.dat_dir is None:
             return None
@@ -543,11 +546,15 @@ def create_app(state: EditorState) -> Flask:
         src = state.source_path
         if src is not None:
             parts = list(src.parts)
-            # Case-insensitive search for the ROM segment.
+            found_rom_idx: int | None = None
             for i, part in enumerate(parts):
                 if part.upper() == "ROM":
-                    subpath = Path(*parts[i + 1 :])
+                    found_rom_idx = i
                     break
+            if found_rom_idx is not None and found_rom_idx + 1 < len(parts):
+                subpath = Path(*parts[found_rom_idx + 1 :])
+            elif len(parts) >= 2:
+                subpath = Path(parts[-2], parts[-1])
         return state.dat_dir / subpath
 
     def _timestamped_backup_dir() -> Path:
@@ -560,16 +567,27 @@ def create_app(state: EditorState) -> Flask:
 
     def _backup_and_write(target: Path, payload: bytes, backup_root: Path) -> str:
         """Write ``payload`` to ``target``. If ``target`` already
-        exists, back it up first under ``backup_root`` using a
-        flattened name so it's easy to find. Returns a status string.
+        exists, rename the prior file *in place* to
+        ``<stem>_backup_<timestamp><ext>`` so the backup sits right
+        next to the new file (matches the operator's mental model).
+        Returns a status string.
         """
         target.parent.mkdir(parents=True, exist_ok=True)
         backup_note = ""
         if target.exists():
-            backup_root.mkdir(parents=True, exist_ok=True)
-            backup_path = backup_root / f"overwritten_{_flat_backup_name(target)}"
-            backup_path.write_bytes(target.read_bytes())
-            backup_note = f" (backed up prior version to {backup_path})"
+            import datetime
+            stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            renamed = target.with_name(f"{target.stem}_backup_{stamp}{target.suffix}")
+            # Avoid overwriting an existing backup with the same second
+            # (unlikely, but defensive).
+            i = 1
+            while renamed.exists():
+                renamed = target.with_name(
+                    f"{target.stem}_backup_{stamp}_{i}{target.suffix}"
+                )
+                i += 1
+            target.rename(renamed)
+            backup_note = f" (renamed prior version to {renamed.name})"
         target.write_bytes(payload)
         return f"wrote {target}{backup_note}"
 
