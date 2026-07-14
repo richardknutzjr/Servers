@@ -328,6 +328,20 @@ button:hover:not(:disabled) { filter: brightness(1.05); }
 .scan-results li:hover {
     border-color: var(--accent);
 }
+.scan-results .scan-heading {
+    cursor: default;
+    background: transparent;
+    border: none;
+    padding: 12px 0 4px;
+    color: var(--accent-2);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    justify-content: flex-start;
+}
+.scan-results .scan-heading:hover {
+    border-color: transparent;
+}
 .scan-results .scan-path {
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
     font-size: 12px;

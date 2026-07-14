@@ -32,6 +32,53 @@ from ffxidat.cipher import decode_bytes
 from ffxidat.items import Item
 
 
+def _looks_like_mesh_dat(head: bytes) -> bool:
+    """A mesh/model DAT's first bytes are readable ASCII tags like
+    ``mt_0`` or ``b401``; an item DAT's leading bytes are rotation-
+    encoded and visually random. Reject anything with >=3 printable
+    ASCII bytes in the first 8 raw bytes."""
+    printable = sum(1 for b in head[:8] if 0x21 <= b < 0x7F)
+    return printable >= 3
+
+
+def _sample_indices(record_count: int) -> list[int]:
+    """Pick a handful of records spread through the file. Guaranteed to
+    include the first and last records so short files still sample OK."""
+    if record_count <= 1:
+        return [0]
+    if record_count <= 8:
+        return list(range(record_count))
+    return [
+        0,
+        record_count // 8,
+        record_count // 4,
+        record_count // 2,
+        (3 * record_count) // 4,
+        (7 * record_count) // 8,
+        record_count - 1,
+    ]
+
+
+def _dat_category_label(dominant_type: str) -> str:
+    """Map an ItemType name to a human-friendly DAT category label."""
+    mapping = {
+        "WEAPON": "Weapons",
+        "ARMOR": "Armor",
+        "USABLE": "Usable items",
+        "CRYSTAL": "Crystals",
+        "CURRENCY": "Currency",
+        "FURNISHING": "Furnishings",
+        "PLANT": "Plants / gardens",
+        "FLOWERPOT": "Flowerpots",
+        "PUPPET_ITEM": "Puppet parts",
+        "MANNEQUIN": "Mannequins",
+        "BOOK": "Books / general items",
+        "LINKSHELL": "Linkshells",
+        "ITEM": "General items",
+    }
+    return mapping.get(dominant_type, dominant_type.title())
+
+
 def _flag_options(flag_cls) -> list[dict]:
     result = []
     for member in flag_cls:
@@ -162,17 +209,22 @@ def create_app(state: EditorState) -> Flask:
     def scan_folder():
         """Walk a directory tree for candidate item DATs.
 
-        Returns files whose size is a multiple of the record size, is
-        larger than the "definitely not an item DAT" threshold, and
-        whose first record decodes into a plausible item header. Sorted
-        biggest-first because the interesting DATs are the big ones.
+        Returns files that:
+          * are big enough to be an item DAT (>= 512 KB),
+          * are divisible by the record size,
+          * don't start with obvious non-item markers (mesh DATs
+            begin with readable ASCII tags like "mt_" or "b###"),
+          * sample cleanly as item records across multiple positions,
+        and categorises each by the dominant item type across the
+        samples so the user can tell "the weapon DAT" from "the armor
+        DAT" from "the general items DAT" without opening every one.
         """
         payload = request.get_json(silent=True) or {}
         root = Path(str(payload.get("path", ""))).expanduser()
         if not root.is_dir():
             abort(400, description=f"not a directory: {root}")
 
-        MIN_SIZE = 512 * 1024  # 512 KB — retail item DATs are megabytes
+        MIN_SIZE = 512 * 1024
         MAX_RESULTS = 100
         results = []
         for p in root.rglob("*"):
@@ -184,28 +236,68 @@ def create_app(state: EditorState) -> Flask:
                 continue
             if size < MIN_SIZE or size % state.record_size != 0:
                 continue
+
+            record_count = size // state.record_size
+            if record_count < 5:
+                continue
+
             try:
                 with p.open("rb") as fh:
-                    first = fh.read(state.record_size)
-                item = Item.from_plain(decode_bytes(first))
-            except Exception:
+                    # Look at the raw (undecoded) first bytes. Model /
+                    # mesh DATs start with readable ASCII tags; item
+                    # DATs are byte-rotated so their leading bytes are
+                    # visually random. Any printable ASCII run in the
+                    # first 8 raw bytes means this isn't an item DAT.
+                    head = fh.read(16)
+                    if _looks_like_mesh_dat(head):
+                        continue
+
+                    # Sample records spread across the file so a single
+                    # coincidentally-plausible record can't smuggle a
+                    # non-item DAT through.
+                    sample_indices = _sample_indices(record_count)
+                    types_seen: dict[str, int] = {}
+                    names_seen: list[str] = []
+                    example_id = None
+                    for idx in sample_indices:
+                        fh.seek(idx * state.record_size)
+                        raw = fh.read(state.record_size)
+                        if len(raw) != state.record_size:
+                            continue
+                        try:
+                            item = Item.from_plain(decode_bytes(raw))
+                        except Exception:
+                            continue
+                        if item.item_type_name.startswith("UNKNOWN"):
+                            continue
+                        if not (1 <= item.id < 100000):
+                            continue
+                        types_seen[item.item_type_name] = types_seen.get(item.item_type_name, 0) + 1
+                        names_seen.append(item.name)
+                        if example_id is None:
+                            example_id = item.id
+            except OSError:
                 continue
-            # Heuristic: item IDs are 16-bit at retail, item type must
-            # be one we recognise. Rules out non-item DATs that happen
-            # to align on 3072-byte boundaries.
-            if item.item_type_name.startswith("UNKNOWN"):
+
+            # Require a majority of samples to look like real items.
+            if sum(types_seen.values()) < max(3, len(_sample_indices(record_count)) * 3 // 4):
                 continue
-            if not (1 <= item.id < 100000):
-                continue
+
+            dominant_type = max(types_seen, key=types_seen.get)
+            label = _dat_category_label(dominant_type)
             results.append(
                 {
                     "path": str(p),
                     "size_bytes": size,
                     "size_mb": round(size / (1024 * 1024), 1),
-                    "records": size // state.record_size,
-                    "sample_id": item.id,
-                    "sample_name": item.name,
-                    "sample_type": item.item_type_name,
+                    "records": record_count,
+                    "category": label,
+                    "dominant_type": dominant_type,
+                    "sample_id": example_id,
+                    "sample_name": names_seen[0] if names_seen else "",
+                    "sample_type": dominant_type,
+                    "sample_names": names_seen[:5],
+                    "type_counts": types_seen,
                 }
             )
             if len(results) >= MAX_RESULTS:

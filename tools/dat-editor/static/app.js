@@ -385,20 +385,44 @@ async function scanFolder() {
             scanStatus.textContent = `no item DATs found under ${data.root}. Double-check the folder path.`;
             return;
         }
-        scanStatus.textContent = `Found ${data.results.length} candidate item DAT${data.results.length === 1 ? "" : "s"}. Click one to open.`;
+        scanStatus.textContent = `Found ${data.results.length} item DAT${data.results.length === 1 ? "" : "s"}. Click one to open — the category label tells you what's inside.`;
+        // Group by category so "Weapons" all sit together.
+        const byCategory = new Map();
         for (const r of data.results) {
-            const li = document.createElement("li");
-            li.innerHTML = `
-                <div>
-                    <div class="scan-path">${escapeHtml(r.path)}</div>
-                    <div class="scan-meta">
-                        example item: ${escapeHtml(r.sample_name)} · type ${escapeHtml(r.sample_type)}
+            const cat = r.category || "Other";
+            if (!byCategory.has(cat)) byCategory.set(cat, []);
+            byCategory.get(cat).push(r);
+        }
+        // Preferred display order (gear first).
+        const preferredOrder = ["Weapons", "Armor", "Books / general items", "General items", "Usable items"];
+        const cats = [...byCategory.keys()].sort((a, b) => {
+            const ai = preferredOrder.indexOf(a);
+            const bi = preferredOrder.indexOf(b);
+            if (ai !== -1 && bi !== -1) return ai - bi;
+            if (ai !== -1) return -1;
+            if (bi !== -1) return 1;
+            return a.localeCompare(b);
+        });
+        for (const cat of cats) {
+            const heading = document.createElement("li");
+            heading.className = "scan-heading";
+            heading.textContent = cat;
+            results.appendChild(heading);
+            for (const r of byCategory.get(cat)) {
+                const li = document.createElement("li");
+                const samples = (r.sample_names || []).slice(0, 3).map(escapeHtml).join(", ") || escapeHtml(r.sample_name || "");
+                li.innerHTML = `
+                    <div>
+                        <div class="scan-path">${escapeHtml(r.path)}</div>
+                        <div class="scan-meta">
+                            example items: ${samples}
+                        </div>
                     </div>
-                </div>
-                <div class="scan-meta">${r.size_mb} MB · ${r.records.toLocaleString()} items</div>
-            `;
-            li.addEventListener("click", () => openLocalPath(r.path));
-            results.appendChild(li);
+                    <div class="scan-meta">${r.size_mb} MB · ${r.records.toLocaleString()} items</div>
+                `;
+                li.addEventListener("click", () => openLocalPath(r.path));
+                results.appendChild(li);
+            }
         }
     } catch (e) {
         scanStatus.textContent = "error: " + e.message;
