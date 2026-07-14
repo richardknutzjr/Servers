@@ -546,25 +546,25 @@ document.addEventListener("DOMContentLoaded", async () => {
                 ? summary.items.slice(0, 6).map((i) => `#${i.id} ${i.name}`).join("\n")
                 : "(no items edited — will still write the DAT byte-identically for backup purposes)";
             const extra = summary.count > 6 ? `\n… and ${summary.count - 6} more` : "";
-            const msg =
+            const confirmMsg =
                 `Deploy ${summary.count} edited item(s)?\n\n${preview}${extra}\n\n` +
                 `SQL  → ${cfg.sql_dir}\n` +
                 `DAT  → ${cfg.dat_target}\n` +
                 `Backup any overwritten files under ${cfg.backup_dir}\\<timestamp>\\`;
-            if (!confirm(msg)) return;
+            if (!confirm(confirmMsg)) return;
             const r = await fetch("/api/deploy", { method: "POST" });
             if (!r.ok) {
                 alert("deploy failed: " + r.status + " " + await r.text());
                 return;
             }
             const body = await r.json();
-            let msg = `Deployed ${body.edited_count} edited item(s).\n\n` + body.notes.join("\n");
+            let resultMsg = `Deployed ${body.edited_count} edited item(s).\n\n` + body.notes.join("\n");
             if (body.backup_root) {
-                msg += `\n\nBackup: ${body.backup_root}`;
+                resultMsg += `\n\nBackup: ${body.backup_root}`;
             } else {
-                msg += "\n\n(nothing to back up — first-time deploy at these paths, no source file known)";
+                resultMsg += "\n\n(nothing to back up — first-time deploy at these paths, no source file known)";
             }
-            alert(msg);
+            alert(resultMsg);
         } catch (e) {
             alert("deploy failed: " + e.message);
         }
