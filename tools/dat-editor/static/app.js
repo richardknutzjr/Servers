@@ -558,11 +558,13 @@ document.addEventListener("DOMContentLoaded", async () => {
                 return;
             }
             const body = await r.json();
-            alert(
-                `Deployed ${body.edited_count} edited item(s).\n\n` +
-                body.notes.join("\n") +
-                `\n\nBackup root: ${body.backup_root}`
-            );
+            let msg = `Deployed ${body.edited_count} edited item(s).\n\n` + body.notes.join("\n");
+            if (body.backup_root) {
+                msg += `\n\nBackup: ${body.backup_root}`;
+            } else {
+                msg += "\n\n(nothing to back up — first-time deploy at these paths, no source file known)";
+            }
+            alert(msg);
         } catch (e) {
             alert("deploy failed: " + e.message);
         }

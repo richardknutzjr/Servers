@@ -33,6 +33,20 @@ from ffxidat.items import Item
 from ffxidat import lsb_export
 
 
+def _flat_backup_name(path: Path) -> str:
+    """Produce a flat filename that preserves enough of ``path`` to
+    identify where it came from, without creating deep subfolders in
+    the backup dir. Drive letter dropped, path separators become
+    underscores. ``C:\\Foo\\Bar\\73.DAT`` becomes ``Foo_Bar_73.DAT``.
+    """
+    _, tail = os.path.splitdrive(str(path))
+    return (
+        tail.lstrip("\\/")
+        .replace("\\", "_")
+        .replace("/", "_")
+    )
+
+
 _DEPLOY_BAT_TEMPLATE = r"""@echo off
 setlocal enabledelayedexpansion
 rem ---------------------------------------------------------------
@@ -546,22 +560,33 @@ def create_app(state: EditorState) -> Flask:
 
     def _backup_and_write(target: Path, payload: bytes, backup_root: Path) -> str:
         """Write ``payload`` to ``target``. If ``target`` already
-        exists, back it up first under ``backup_root`` preserving the
-        target's absolute path structure. Returns a status string.
+        exists, back it up first under ``backup_root`` using a
+        flattened name so it's easy to find. Returns a status string.
         """
         target.parent.mkdir(parents=True, exist_ok=True)
         backup_note = ""
         if target.exists():
-            # Preserve the target's absolute path (drive letter stripped)
-            # under the backup root so the backup layout is legible.
-            drive, tail = os.path.splitdrive(str(target))
-            rel_parts = Path(tail.lstrip("\\/")).parts
-            backup_path = backup_root.joinpath(*rel_parts)
-            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            backup_root.mkdir(parents=True, exist_ok=True)
+            backup_path = backup_root / f"overwritten_{_flat_backup_name(target)}"
             backup_path.write_bytes(target.read_bytes())
             backup_note = f" (backed up prior version to {backup_path})"
         target.write_bytes(payload)
         return f"wrote {target}{backup_note}"
+
+    def _snapshot_source_dat(backup_root: Path) -> str | None:
+        """Copy the currently-loaded source DAT (as-loaded, before any
+        edits) into the backup root so there's always a rollback point.
+
+        Only runs when we know the source path (i.e. the DAT was
+        loaded via /api/open-path, not uploaded through the browser
+        where we only got bytes without a path). Returns a note or None.
+        """
+        if state.source_path is None or not state.source_path.exists():
+            return None
+        backup_root.mkdir(parents=True, exist_ok=True)
+        target = backup_root / f"source_{_flat_backup_name(state.source_path)}"
+        target.write_bytes(state.source_path.read_bytes())
+        return f"snapshotted source DAT to {target}"
 
     @app.post("/api/deploy")
     def deploy():
@@ -595,20 +620,23 @@ def create_app(state: EditorState) -> Flask:
         assert dat_target is not None  # dat_dir is set, so this is fine
 
         try:
+            source_note = _snapshot_source_dat(backup_root)
             sql_note = _backup_and_write(sql_target, sql_bytes, backup_root)
             dat_note = _backup_and_write(dat_target, dat_bytes, backup_root)
             bat_note = _write_deploy_bat_if_missing(state.sql_dir)
         except OSError as exc:
             abort(500, description=f"filesystem error: {exc}")
 
+        notes = [n for n in (source_note, sql_note, dat_note, bat_note) if n]
+        backup_created = backup_root.exists() and any(backup_root.iterdir())
         return jsonify(
             {
                 "ok": True,
                 "edited_count": len(edited),
                 "sql_path": str(sql_target),
                 "dat_path": str(dat_target),
-                "backup_root": str(backup_root),
-                "notes": [sql_note, dat_note, bat_note],
+                "backup_root": str(backup_root) if backup_created else None,
+                "notes": notes,
             }
         )
 
