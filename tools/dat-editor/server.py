@@ -33,6 +33,42 @@ from ffxidat.items import Item
 from ffxidat import lsb_export
 
 
+_DEPLOY_BAT_TEMPLATE = r"""@echo off
+setlocal enabledelayedexpansion
+rem ---------------------------------------------------------------
+rem  deploy.bat — apply generated SQL patches to the LSB database.
+rem  Written once by ffxi-dat-editor's Deploy button; edit the
+rem  MySQL connection block below and keep it customized.
+rem ---------------------------------------------------------------
+
+rem -- MySQL connection ------------------------------------------------
+set MYSQL_EXE=C:\xampp\mysql\bin\mysql.exe
+set DB_HOST=127.0.0.1
+set DB_PORT=3306
+set DB_USER=root
+set DB_PASS=
+set DB_NAME=xidb
+
+rem -- Where the generated .sql files live (this script's own dir) ----
+set SQL_DIR=%~dp0
+
+echo Applying every *_lsb_patch.sql in %SQL_DIR% ...
+for %%F in ("%SQL_DIR%*_lsb_patch.sql") do (
+    echo   -- %%~nxF
+    "%MYSQL_EXE%" -h %DB_HOST% -P %DB_PORT% -u %DB_USER% -p%DB_PASS% %DB_NAME% < "%%F"
+    if errorlevel 1 (
+        echo   FAILED to apply %%~nxF ^(errorlevel !errorlevel!^)
+        exit /b 1
+    )
+)
+
+echo All patches applied. Any -- TODO ^(needs Lua^) lines in the .sql
+echo files still need a matching item script under
+echo scripts/globals/items/^<sortname^>.lua on the server side.
+endlocal
+"""
+
+
 def _looks_like_mesh_dat(head: bytes) -> bool:
     """A mesh/model DAT's first bytes are readable ASCII tags like
     ``mt_0`` or ``b401``; an item DAT's leading bytes are rotation-
@@ -96,7 +132,15 @@ class EditorState:
     multi-user story — this is a local desktop tool.
     """
 
-    def __init__(self, dat_path: Path | None, record_size: int, allow_in_place: bool):
+    def __init__(
+        self,
+        dat_path: Path | None,
+        record_size: int,
+        allow_in_place: bool,
+        sql_dir: Path | None = None,
+        dat_dir: Path | None = None,
+        backup_dir: Path | None = None,
+    ):
         self.record_size = record_size
         self.allow_in_place = allow_in_place
         self.source_path: Path | None = dat_path
@@ -108,6 +152,13 @@ class EditorState:
         self.original_record_bytes: list[bytes] = (
             [it.to_plain(self.record_size) for it in self.dat.items] if self.dat else []
         )
+        # Deploy paths — where "Deploy edits" writes SQL, edited DATs,
+        # and any pre-existing files it displaces. Defaults are matched
+        # to the operator's server-relaunch tree; override at launch
+        # with --sql-dir / --dat-dir / --backup-dir.
+        self.sql_dir: Path | None = sql_dir
+        self.dat_dir: Path | None = dat_dir
+        self.backup_dir: Path | None = backup_dir
         self.lock = threading.Lock()
 
     def load_from_bytes(self, filename: str, raw: bytes) -> None:
@@ -213,6 +264,11 @@ def create_app(state: EditorState) -> Flask:
                 state.load_from_bytes(p.name, p.read_bytes())
             except ValueError as exc:
                 abort(400, description=str(exc))
+            # Preserve the source path so Deploy can figure out the
+            # correct <subpath> after ROM/ when writing the edited DAT.
+            # load_from_bytes clears it (safe default for uploads);
+            # restore it here since we opened by explicit local path.
+            state.source_path = p
         return jsonify({"ok": True, "filename": state.filename, "items": len(state.dat.items), "path": str(p)})
 
     @app.post("/api/scan")
@@ -445,6 +501,128 @@ def create_app(state: EditorState) -> Flask:
             mimetype="text/sql",
         )
 
+    @app.get("/api/deploy/config")
+    def deploy_config():
+        """Report the configured deploy paths back to the UI."""
+        return jsonify(
+            {
+                "sql_dir": str(state.sql_dir) if state.sql_dir else None,
+                "dat_dir": str(state.dat_dir) if state.dat_dir else None,
+                "backup_dir": str(state.backup_dir) if state.backup_dir else None,
+                "source_path": str(state.source_path) if state.source_path else None,
+                "dat_target": str(_dat_target_path()) if state.dat_dir else None,
+            }
+        )
+
+    def _dat_target_path() -> Path | None:
+        """Where the edited DAT will land under dat_dir.
+
+        If the current DAT was loaded from a path containing a ``ROM``
+        segment, preserve everything after that segment. So a source
+        at ``C:\\...\\FFXI\\ROM\\286\\73.DAT`` lands at
+        ``<dat_dir>\\286\\73.DAT``. Otherwise fall back to
+        ``<dat_dir>\\<filename>``.
+        """
+        if state.dat_dir is None:
+            return None
+        subpath = Path(state.filename or "item.DAT")
+        src = state.source_path
+        if src is not None:
+            parts = list(src.parts)
+            # Case-insensitive search for the ROM segment.
+            for i, part in enumerate(parts):
+                if part.upper() == "ROM":
+                    subpath = Path(*parts[i + 1 :])
+                    break
+        return state.dat_dir / subpath
+
+    def _timestamped_backup_dir() -> Path:
+        """A unique subfolder under backup_dir stamped with the wall
+        clock. Ensures every deploy has its own snapshot."""
+        import datetime
+        assert state.backup_dir is not None
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        return state.backup_dir / stamp
+
+    def _backup_and_write(target: Path, payload: bytes, backup_root: Path) -> str:
+        """Write ``payload`` to ``target``. If ``target`` already
+        exists, back it up first under ``backup_root`` preserving the
+        target's absolute path structure. Returns a status string.
+        """
+        target.parent.mkdir(parents=True, exist_ok=True)
+        backup_note = ""
+        if target.exists():
+            # Preserve the target's absolute path (drive letter stripped)
+            # under the backup root so the backup layout is legible.
+            drive, tail = os.path.splitdrive(str(target))
+            rel_parts = Path(tail.lstrip("\\/")).parts
+            backup_path = backup_root.joinpath(*rel_parts)
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            backup_path.write_bytes(target.read_bytes())
+            backup_note = f" (backed up prior version to {backup_path})"
+        target.write_bytes(payload)
+        return f"wrote {target}{backup_note}"
+
+    @app.post("/api/deploy")
+    def deploy():
+        """Write edited DAT + generated SQL to the configured paths,
+        backing up any pre-existing file first. This is the primary
+        "commit my changes" button — no browser download in between.
+        """
+        if state.dat is None:
+            abort(400, description="no DAT loaded")
+        if state.sql_dir is None or state.dat_dir is None or state.backup_dir is None:
+            abort(
+                400,
+                description=(
+                    "deploy paths not configured. Restart with --sql-dir / "
+                    "--dat-dir / --backup-dir, or set the equivalents in the "
+                    "environment (DAT_EDITOR_SQL_DIR / _DAT_DIR / _BACKUP_DIR)."
+                ),
+            )
+
+        edited = _edited_items()
+
+        with state.lock:
+            dat_bytes = state.dat.to_bytes()
+            sql_bytes = lsb_export.emit_patch(edited).encode("utf-8")
+
+        backup_root = _timestamped_backup_dir()
+
+        stem, ext = os.path.splitext(state.filename or "item.DAT")
+        sql_target = state.sql_dir / f"{stem}_lsb_patch.sql"
+        dat_target = _dat_target_path()
+        assert dat_target is not None  # dat_dir is set, so this is fine
+
+        try:
+            sql_note = _backup_and_write(sql_target, sql_bytes, backup_root)
+            dat_note = _backup_and_write(dat_target, dat_bytes, backup_root)
+            bat_note = _write_deploy_bat_if_missing(state.sql_dir)
+        except OSError as exc:
+            abort(500, description=f"filesystem error: {exc}")
+
+        return jsonify(
+            {
+                "ok": True,
+                "edited_count": len(edited),
+                "sql_path": str(sql_target),
+                "dat_path": str(dat_target),
+                "backup_root": str(backup_root),
+                "notes": [sql_note, dat_note, bat_note],
+            }
+        )
+
+    def _write_deploy_bat_if_missing(sql_dir: Path) -> str:
+        """Drop a template `deploy.bat` next to the SQL files the first
+        time we deploy. Never overwrites an existing one — the operator
+        is expected to fill in their MySQL credentials once and keep
+        it customised."""
+        bat_path = sql_dir / "deploy.bat"
+        if bat_path.exists():
+            return f"deploy.bat already present at {bat_path} (not touched)"
+        bat_path.write_text(_DEPLOY_BAT_TEMPLATE, encoding="utf-8")
+        return f"wrote deploy.bat template to {bat_path} — edit the MySQL creds at the top before first use"
+
     @app.get("/api/download")
     def download():
         """Send the current in-memory DAT to the browser as a download."""
@@ -562,6 +740,44 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="permit /api/save to overwrite the source DAT (off by default)",
     )
+
+    # Deploy paths — SQL, DAT, and backup destinations for the
+    # "Deploy edits" button. Defaults match the operator's typical
+    # server-relaunch layout under D:\; every one can be overridden
+    # via CLI arg or the matching DAT_EDITOR_*_DIR env var.
+    default_sql_dir = os.environ.get(
+        "DAT_EDITOR_SQL_DIR",
+        r"D:\server_relaunch\modules\custom\sql",
+    )
+    default_dat_dir = os.environ.get(
+        "DAT_EDITOR_DAT_DIR",
+        r"D:\server_relaunch\Custom DATs\Relaunch Custom DATs\ROM",
+    )
+    default_backup_dir = os.environ.get(
+        "DAT_EDITOR_BACKUP_DIR",
+        r"D:\server_relaunch\modules\backupdatsqls",
+    )
+    parser.add_argument(
+        "--sql-dir",
+        default=default_sql_dir,
+        help=f"where Deploy writes the SQL patch (default: {default_sql_dir})",
+    )
+    parser.add_argument(
+        "--dat-dir",
+        default=default_dat_dir,
+        help=(
+            f"where Deploy writes the edited DAT, preserving any subpath "
+            f"after ROM/ from the source (default: {default_dat_dir})"
+        ),
+    )
+    parser.add_argument(
+        "--backup-dir",
+        default=default_backup_dir,
+        help=(
+            f"where Deploy copies any file it's about to overwrite, "
+            f"under a timestamped subfolder (default: {default_backup_dir})"
+        ),
+    )
     args = parser.parse_args(argv)
 
     dat_path: Path | None = None
@@ -576,6 +792,9 @@ def main(argv: list[str] | None = None) -> int:
         dat_path=dat_path,
         record_size=args.record_size,
         allow_in_place=args.allow_in_place,
+        sql_dir=Path(args.sql_dir).expanduser() if args.sql_dir else None,
+        dat_dir=Path(args.dat_dir).expanduser() if args.dat_dir else None,
+        backup_dir=Path(args.backup_dir).expanduser() if args.backup_dir else None,
     )
     app = create_app(state)
 

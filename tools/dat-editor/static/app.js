@@ -48,6 +48,7 @@ async function loadStatus() {
     document.getElementById("item-count").textContent = s.loaded ? `${s.item_count} items` : "";
     document.getElementById("download-btn").disabled = !s.loaded;
     document.getElementById("export-sql-btn").disabled = !s.loaded;
+    document.getElementById("deploy-btn").disabled = !s.loaded;
     document.getElementById("landing").classList.toggle("hidden", s.loaded);
     document.getElementById("layout").classList.toggle("hidden", !s.loaded);
     return s;
@@ -525,6 +526,45 @@ document.addEventListener("DOMContentLoaded", async () => {
             }
         } catch (e) {
             alert("export failed: " + e.message);
+        }
+    });
+
+    document.getElementById("deploy-btn").addEventListener("click", async () => {
+        try {
+            const [summary, cfg] = await Promise.all([
+                apiGet("/api/edited"),
+                apiGet("/api/deploy/config"),
+            ]);
+            if (!cfg.sql_dir || !cfg.dat_dir || !cfg.backup_dir) {
+                alert(
+                    "Deploy paths are not fully configured. Relaunch the editor with " +
+                    "--sql-dir, --dat-dir, and --backup-dir, or set the DAT_EDITOR_* env vars."
+                );
+                return;
+            }
+            const preview = summary.count
+                ? summary.items.slice(0, 6).map((i) => `#${i.id} ${i.name}`).join("\n")
+                : "(no items edited — will still write the DAT byte-identically for backup purposes)";
+            const extra = summary.count > 6 ? `\n… and ${summary.count - 6} more` : "";
+            const msg =
+                `Deploy ${summary.count} edited item(s)?\n\n${preview}${extra}\n\n` +
+                `SQL  → ${cfg.sql_dir}\n` +
+                `DAT  → ${cfg.dat_target}\n` +
+                `Backup any overwritten files under ${cfg.backup_dir}\\<timestamp>\\`;
+            if (!confirm(msg)) return;
+            const r = await fetch("/api/deploy", { method: "POST" });
+            if (!r.ok) {
+                alert("deploy failed: " + r.status + " " + await r.text());
+                return;
+            }
+            const body = await r.json();
+            alert(
+                `Deployed ${body.edited_count} edited item(s).\n\n` +
+                body.notes.join("\n") +
+                `\n\nBackup root: ${body.backup_root}`
+            );
+        } catch (e) {
+            alert("deploy failed: " + e.message);
         }
     });
 
