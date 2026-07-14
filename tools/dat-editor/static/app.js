@@ -96,6 +96,8 @@ async function selectItem(itemId) {
     renderEditor(item);
 }
 
+const EQUIPMENT_TYPES = new Set(["ARMOR", "WEAPON"]);
+
 function renderEditor(item) {
     const editor = document.getElementById("editor");
     editor.innerHTML = "";
@@ -104,32 +106,46 @@ function renderEditor(item) {
     h.textContent = `#${item.id} · ${escapeHtml(item.name)}`;
     editor.appendChild(h);
 
+    // Only the equipment-typed items store meaningful values in the
+    // level/slots/races/jobs fields. For general items (BOOK, USABLE,
+    // FURNISHING, etc.) those bytes are actually part of the strings
+    // block, so surfacing them as editable fields would be misleading.
+    const isEquipment = EQUIPMENT_TYPES.has(item.item_type_name);
+
     const meta = document.createElement("p");
     meta.className = "item-meta";
-    meta.textContent = `type: ${item.item_type_name}${item.is_weapon ? " · weapon fields shown" : ""}`;
+    let metaText = `type: ${item.item_type_name}`;
+    if (!isEquipment) metaText += " · equipment-only fields hidden";
     editor.appendChild(meta);
+    meta.textContent = metaText;
 
     editor.appendChild(sectionTitle("Basics"));
-    const basics = fieldGrid([
-        numField(item, "level", "Level to equip"),
-        numField(item, "superior_level", "Item level"),
+    const basicFields = [
         numField(item, "flags", "Flags (u16)"),
         numField(item, "stack_size", "Stack size"),
         numField(item, "valid_targets", "Valid targets"),
-        numField(item, "model", "Model id"),
         numField(item, "resource_id", "Resource id"),
         numField(item, "id", "Item id (rename)"),
-    ]);
-    editor.appendChild(basics);
+    ];
+    if (isEquipment) {
+        basicFields.unshift(
+            numField(item, "level", "Level to equip"),
+            numField(item, "superior_level", "Item level"),
+        );
+        basicFields.push(numField(item, "model", "Model id"));
+    }
+    editor.appendChild(fieldGrid(basicFields));
 
-    editor.appendChild(sectionTitle("Slots"));
-    editor.appendChild(checkboxGrid(item, "slot_names", state.enums.slots));
+    if (isEquipment) {
+        editor.appendChild(sectionTitle("Slots"));
+        editor.appendChild(checkboxGrid(item, "slot_names", state.enums.slots));
 
-    editor.appendChild(sectionTitle("Races"));
-    editor.appendChild(checkboxGrid(item, "race_names", state.enums.races));
+        editor.appendChild(sectionTitle("Races"));
+        editor.appendChild(checkboxGrid(item, "race_names", state.enums.races));
 
-    editor.appendChild(sectionTitle("Jobs"));
-    editor.appendChild(checkboxGrid(item, "job_names", state.enums.jobs));
+        editor.appendChild(sectionTitle("Jobs"));
+        editor.appendChild(checkboxGrid(item, "job_names", state.enums.jobs));
+    }
 
     if (item.is_weapon) {
         editor.appendChild(sectionTitle("Weapon"));
@@ -144,16 +160,18 @@ function renderEditor(item) {
         );
     }
 
-    editor.appendChild(sectionTitle("Timings"));
-    editor.appendChild(
-        fieldGrid([
-            numField(item, "casting_time", "Casting time"),
-            numField(item, "use_delay", "Use delay"),
-            numField(item, "reuse_delay", "Reuse delay"),
-            numField(item, "max_charges", "Max charges"),
-            numField(item, "shield_size", "Shield size / skill"),
-        ])
-    );
+    if (isEquipment) {
+        editor.appendChild(sectionTitle("Timings"));
+        editor.appendChild(
+            fieldGrid([
+                numField(item, "casting_time", "Casting time"),
+                numField(item, "use_delay", "Use delay"),
+                numField(item, "reuse_delay", "Reuse delay"),
+                numField(item, "max_charges", "Max charges"),
+                numField(item, "shield_size", "Shield size / skill"),
+            ])
+        );
+    }
 
     if (item.strings_block && item.strings_block.parsed) {
         editor.appendChild(sectionTitle("Name & description"));

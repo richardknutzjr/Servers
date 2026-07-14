@@ -150,6 +150,14 @@ class Item:
     # and passed through unchanged on save.
     strings_block: Optional[StringsBlock] = None
 
+    # The actual offset (within tail) where the strings block was found.
+    # Equipment/weapons use fixed offsets, but general items (BOOK,
+    # USABLE, currency, etc.) put their strings block earlier, at a
+    # per-type offset we detect at parse time. Remember it so we can
+    # splice back at the same place on save.
+    strings_offset: int = 0
+    strings_max_size: int = 0
+
     @property
     def is_weapon(self) -> bool:
         return self.item_type == int(ItemType.WEAPON)
@@ -192,10 +200,18 @@ class Item:
             for entry in self.strings_block.entries:
                 if entry.kind == KIND_STRING and entry.text.strip():
                     return entry.text.strip()
-        for s in self.strings:
-            if s.strip():
-                return s.strip()
-        return f"item_{self.id}"
+        # No structured strings block. Use the ASCII heuristic only for
+        # runs that actually look like a name (at least 3 alphabetic
+        # characters and mostly letters) so we don't display gibberish
+        # like ":E>" as the "name".
+        for candidate in self.strings:
+            s = candidate.strip()
+            if len(s) < 3:
+                continue
+            letters = sum(1 for ch in s if ch.isalpha())
+            if letters >= 3 and letters / len(s) >= 0.5:
+                return s
+        return f"{self.item_type_name.lower()}_{self.id}"
 
     @property
     def description(self) -> str:
@@ -250,14 +266,17 @@ class Item:
             item.skill = skill
             item.jug_size = jug
 
-        # Parse the structured strings block if there's room for one.
-        strings_offset = item._strings_offset_in_tail
-        strings_size = item._strings_max_size
-        if len(item.tail) >= strings_offset + strings_size:
-            item.strings_block = StringsBlock.parse(
-                item.tail[strings_offset : strings_offset + strings_size],
-                max_size=strings_size,
-            )
+        # Locate the strings block. Equipment/weapons use fixed
+        # offsets; general items (BOOK, USABLE, currency, etc.) put
+        # their strings block much earlier — inside what the equipment
+        # layout treats as "header". Scan candidate absolute offsets
+        # and take the first that decodes cleanly.
+        found = _find_strings_block(plain, item.is_weapon)
+        if found is not None:
+            offset, block, size = found
+            item.strings_offset = offset
+            item.strings_max_size = size
+            item.strings_block = block
 
         item.strings = extract_strings(item.tail)
         return item
@@ -306,19 +325,22 @@ class Item:
                 self.jug_size & 0xFF,
             )
 
-        # Splice the (possibly edited) strings block back over its slot
-        # in the tail. If we never parsed one, this is a no-op — the
-        # existing bytes were preserved verbatim.
-        if self.strings_block is not None:
-            strings_offset = self._strings_offset_in_tail
-            strings_size = self._strings_max_size
-            if len(tail) < strings_offset + strings_size:
-                tail.extend(b"\x00" * (strings_offset + strings_size - len(tail)))
-            tail[strings_offset : strings_offset + strings_size] = (
-                self.strings_block.serialize()
-            )
+        record = bytearray(header + bytes(tail))
 
-        record = header + bytes(tail)
+        # Splice the (possibly edited) strings block back at its
+        # absolute offset. For non-equipment items this overwrites
+        # equipment-specific header bytes at 0x0E-0x27 — that's correct,
+        # because those bytes were the strings block in the source file
+        # (they only look like level/slots/etc. because we parsed with
+        # the equipment layout).
+        if self.strings_block is not None and self.strings_max_size > 0:
+            offset = self.strings_offset
+            size = self.strings_max_size
+            if len(record) < offset + size:
+                record.extend(b"\x00" * (offset + size - len(record)))
+            record[offset : offset + size] = self.strings_block.serialize()
+
+        record = bytes(record)
         if len(record) < record_size:
             record += b"\x00" * (record_size - len(record))
         elif len(record) > record_size:
@@ -338,6 +360,7 @@ class Item:
         d["description"] = self.description
         d["is_weapon"] = self.is_weapon
         d["strings_block"] = self.strings_block.to_dict() if self.strings_block else None
+        d["strings_offset"] = self.strings_offset
         return d
 
     def apply_dict(self, patch: dict) -> None:
@@ -386,6 +409,73 @@ class Item:
         # Strings block: nested edits go through StringsBlock.apply_dict.
         if "strings_block" in patch and self.strings_block is not None and patch["strings_block"]:
             self.strings_block.apply_dict(patch["strings_block"])
+
+
+def _looks_like_real_text(block: StringsBlock) -> bool:
+    """A parsed StringsBlock at a candidate offset only counts if the
+    entries look like human-readable strings — not just bytes that
+    happened to satisfy the layout constraints. Real item names contain
+    at least a few letters."""
+    if not block.parsed or not block.entries:
+        return False
+    for entry in block.entries:
+        if entry.kind != KIND_STRING:
+            continue
+        text = entry.text.strip()
+        if not text:
+            continue
+        letters = sum(1 for ch in text if ch.isalpha())
+        if letters >= 3 and letters / max(len(text), 1) >= 0.5:
+            return True
+    return False
+
+
+# Offsets that FFXI item DATs park their strings block at, in
+# best-match order. The first entry is the standard equipment offset;
+# the rest cover weapons and the various general-item sub-formats
+# (BOOK, USABLE, currency, etc.).
+_STRINGS_OFFSET_CANDIDATES = (
+    0x28,  # equipment (armor, general items with equipment-shaped header)
+    0x30,  # weapon
+    0x14,  # general item variant 1
+    0x18,  # general item variant 2
+    0x1C,  # general item variant 3
+    0x20,  # general item variant 4
+    0x24,  # general item variant 5
+    0x0E,  # tightly-packed variant
+    0x10,
+    0x12,
+)
+
+
+def _find_strings_block(record: bytes, weapon: bool):
+    """Return ``(offset, block, size)`` for the strings block, or ``None``.
+
+    Offsets are absolute (relative to the start of the plaintext
+    record). Equipment/weapon layouts get their standard offset tried
+    first; the rest of the candidates cover general items whose strings
+    block starts INSIDE what the equipment layout calls "header".
+    """
+    ordered = list(_STRINGS_OFFSET_CANDIDATES)
+    if weapon and 0x30 in ordered:
+        ordered.remove(0x30)
+        ordered.insert(0, 0x30)
+
+    # Icon typically lives at 0x280 in the record. Cap the strings
+    # region there so a bad match doesn't reach into icon bytes.
+    icon_start = 0x280
+
+    for offset in ordered:
+        if offset + 8 > len(record):
+            continue
+        avail = icon_start - offset
+        if avail < 8:
+            continue
+        avail = min(avail, len(record) - offset)
+        block = StringsBlock.parse(record[offset : offset + avail], max_size=avail)
+        if block.parsed and _looks_like_real_text(block):
+            return offset, block, avail
+    return None
 
 
 def extract_strings(tail: bytes, min_len: int = 3) -> list[str]:

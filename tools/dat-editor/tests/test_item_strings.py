@@ -184,6 +184,63 @@ class WeaponTests(unittest.TestCase):
         self.assertEqual(item2.delay, 240)
 
 
+class GeneralItemTests(unittest.TestCase):
+    """General items (BOOK, USABLE, etc.) put the strings block at a
+    smaller offset than equipment, inside what the equipment layout
+    would treat as its own header. The detector must find it."""
+
+    def test_book_strings_at_earlier_offset(self):
+        # Build a BOOK-shaped record: the small shared header at
+        # 0x00-0x0D, then the strings block at absolute 0x14. Every
+        # byte between 0x0E and 0x13 is zero — those are the general
+        # item's activation/timer fields for our purposes.
+        record = bytearray(RECORD_SIZE)
+        struct.pack_into(
+            "<IHHHHH",
+            record, 0,
+            5467,                    # id
+            0,                       # flags
+            1,                       # stack
+            int(ItemType.BOOK),      # type
+            0,                       # resource_id
+            0,                       # valid_targets
+        )
+        entries = [
+            StringEntry(kind=KIND_STRING, text="Emerald Sword Strategy Guide"),
+            StringEntry(kind=KIND_STRING, text="a strategy guide"),
+            StringEntry(kind=KIND_STRING, text="A dusty tome on swordsmanship."),
+        ]
+        block = StringsBlock(max_size=RECORD_SIZE - 0x14, entries=entries, parsed=True)
+        strings_bytes = block.serialize()
+        record[0x14 : 0x14 + len(strings_bytes)] = strings_bytes
+
+        item = Item.from_plain(bytes(record))
+        self.assertEqual(item.id, 5467)
+        self.assertEqual(item.item_type_name, "BOOK")
+        self.assertIsNotNone(item.strings_block)
+        self.assertTrue(item.strings_block.parsed)
+        self.assertEqual(item.strings_offset, 0x14)
+        self.assertEqual(item.name, "Emerald Sword Strategy Guide")
+
+        # Round-trip: edit the name, re-serialise, re-parse, confirm
+        # the edit lands at the same absolute offset.
+        item.apply_dict(
+            {
+                "strings_block": {
+                    "entries": [
+                        {"text": "Custom Server Codex"},
+                        {"text": "a codex"},
+                        {"text": "Compiled for the relaunch."},
+                    ]
+                }
+            }
+        )
+        rebuilt = item.to_plain()
+        item2 = Item.from_plain(rebuilt)
+        self.assertEqual(item2.name, "Custom Server Codex")
+        self.assertEqual(item2.strings_offset, 0x14)
+
+
 class UnparseableTests(unittest.TestCase):
     def test_bad_strings_block_preserved_verbatim(self):
         header = struct.pack(
@@ -201,13 +258,15 @@ class UnparseableTests(unittest.TestCase):
         plain = header + bytes(tail)
 
         item = Item.from_plain(plain)
-        self.assertIsNotNone(item.strings_block)
-        self.assertFalse(item.strings_block.parsed)
-        # No name from strings block, but ASCII heuristic still finds
-        # the marker in the tail.
+        # No candidate offset gave us a valid strings block, so we
+        # don't have one at all — nothing to edit, and nothing to
+        # trample on save.
+        self.assertIsNone(item.strings_block)
+        # ASCII heuristic still surfaces the marker text so the user
+        # can see there's something in there.
         self.assertIn("garbage tail marker", item.strings)
 
-        # And a save round-trip must preserve the record byte-for-byte
+        # A save round-trip must preserve the record byte-for-byte
         # because we didn't touch anything we didn't understand.
         rebuilt = item.to_plain()
         self.assertEqual(rebuilt, plain)
