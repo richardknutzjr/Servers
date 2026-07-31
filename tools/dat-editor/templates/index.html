@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>FFXI DAT Editor</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top-bar">
+    <div class="title">
+        <strong>FFXI DAT Editor</strong>
+        <span id="filename" class="path"></span>
+    </div>
+    <div class="counts">
+        <span id="item-count"></span>
+        <button id="open-btn" class="secondary">Open DAT…</button>
+        <button id="export-sql-btn" class="secondary" disabled>Export SQL patch</button>
+        <button id="download-btn" class="secondary" disabled>Download edited DAT</button>
+        <button id="deploy-btn" disabled title="Write SQL + edited DAT directly to configured paths, backing up prior versions">Deploy edits</button>
+    </div>
+</header>
+
+<main id="layout" class="layout hidden">
+    <aside class="sidebar">
+        <div class="search-box">
+            <input id="search" type="text" placeholder="Search by id or name…">
+        </div>
+        <ul id="item-list" class="item-list"></ul>
+        <div class="pager">
+            <button id="prev-page" class="secondary">&lsaquo; Prev</button>
+            <span id="page-info">–</span>
+            <button id="next-page" class="secondary">Next &rsaquo;</button>
+        </div>
+    </aside>
+    <section id="editor" class="editor">
+        <p class="hint">Select an item on the left to edit.</p>
+    </section>
+</main>
+
+<section id="landing" class="landing">
+    <div class="landing-card">
+        <h1>Open a DAT to start editing</h1>
+        <p>Pick an item DAT file from your FFXI installation
+           (e.g. <code>ROM/…/item_armor.DAT</code>). The tool works in
+           memory — you'll download the edited copy when you're done.</p>
+        <p><strong>Back up your DAT first.</strong> Drop the original
+           somewhere safe before overwriting anything in your game
+           folder.</p>
+        <label id="file-drop" class="file-drop">
+            <input id="file-input" type="file" accept=".DAT,.dat">
+            <span class="file-drop-inner">
+                <span class="file-drop-icon">+</span>
+                Click to choose, or drag a <code>.DAT</code> here
+            </span>
+        </label>
+
+        <div class="landing-divider"><span>or</span></div>
+
+        <div class="scan-section">
+            <p class="hint">
+                Don't know which file to pick? Point me at your FFXI
+                install folder and I'll scan it for item DATs.
+            </p>
+            <div class="scan-row">
+                <input id="scan-path" type="text"
+                       placeholder="C:\Program Files (x86)\PlayOnline\SquareEnix\FINAL FANTASY XI">
+                <button id="scan-btn">Scan for item DATs</button>
+            </div>
+            <p id="scan-status" class="status"></p>
+            <ul id="scan-results" class="scan-results"></ul>
+        </div>
+
+        <p id="landing-status" class="status"></p>
+    </div>
+</section>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
