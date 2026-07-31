@@ -178,6 +178,18 @@ function renderEditor(item) {
     if (item.strings_block && item.strings_block.parsed) {
         editor.appendChild(sectionTitle("Name & description"));
         editor.appendChild(stringsEditor(item.strings_block));
+    } else if (item.strings_meta && item.strings_meta.length) {
+        editor.appendChild(sectionTitle("Strings (raw edit — same length or shorter)"));
+        editor.appendChild(rawStringsEditor(item.strings_meta));
+        const hint = document.createElement("p");
+        hint.className = "hint";
+        hint.textContent =
+            "This item's strings block layout couldn't be fully parsed, " +
+            "so edits are done by in-place byte substitution. Each field's " +
+            "new value must be the same length or shorter than the original " +
+            "(the difference is padded with NULs). Longer values would " +
+            "shift the bytes after them and corrupt the record.";
+        editor.appendChild(hint);
     } else if (item.strings && item.strings.length) {
         editor.appendChild(sectionTitle("Strings preview (unparseable — read-only)"));
         const pre = document.createElement("div");
@@ -284,6 +296,36 @@ function numField(item, key, label) {
     return l;
 }
 
+function rawStringsEditor(stringsMeta) {
+    const wrap = document.createElement("div");
+    wrap.className = "strings-editor";
+    wrap.dataset.rawStringsField = "1";
+    stringsMeta.forEach((meta) => {
+        const l = document.createElement("label");
+        l.className = "string-label";
+        const cap = document.createElement("span");
+        cap.textContent = `@0x${meta.offset.toString(16).padStart(4, "0")} · max ${meta.length} bytes`;
+        l.appendChild(cap);
+        let input;
+        if ((meta.text || "").length > 40) {
+            input = document.createElement("textarea");
+            input.rows = 3;
+            input.value = meta.text || "";
+        } else {
+            input = document.createElement("input");
+            input.type = "text";
+            input.value = meta.text || "";
+        }
+        input.maxLength = meta.length;
+        input.dataset.offset = String(meta.offset);
+        input.dataset.origText = meta.text || "";
+        input.addEventListener("input", () => (state.dirty = true));
+        l.appendChild(input);
+        wrap.appendChild(l);
+    });
+    return wrap;
+}
+
 function stringsEditor(block) {
     const wrap = document.createElement("div");
     wrap.className = "strings-editor";
@@ -353,16 +395,32 @@ function collectPatch() {
     }
     const stringsWrap = document.querySelector("#editor .strings-editor");
     if (stringsWrap) {
-        const entries = [];
-        for (const el of stringsWrap.querySelectorAll("[data-index]")) {
-            const i = Number(el.dataset.index);
-            if (el.dataset.kind === "integer") {
-                entries[i] = { value: Number(el.value) };
-            } else {
-                entries[i] = { text: el.value };
+        if (stringsWrap.dataset.rawStringsField) {
+            // Raw byte-substitution mode (unparseable strings block).
+            // Only emit entries the user actually changed to keep the
+            // payload minimal and to avoid tripping the length guard on
+            // untouched fields.
+            const edits = [];
+            for (const el of stringsWrap.querySelectorAll("[data-offset]")) {
+                if (el.value === el.dataset.origText) continue;
+                edits.push({
+                    offset: Number(el.dataset.offset),
+                    text: el.value,
+                });
             }
+            if (edits.length) patch.raw_string_edits = edits;
+        } else {
+            const entries = [];
+            for (const el of stringsWrap.querySelectorAll("[data-index]")) {
+                const i = Number(el.dataset.index);
+                if (el.dataset.kind === "integer") {
+                    entries[i] = { value: Number(el.value) };
+                } else {
+                    entries[i] = { text: el.value };
+                }
+            }
+            patch.strings_block = { entries };
         }
-        patch.strings_block = { entries };
     }
     return patch;
 }

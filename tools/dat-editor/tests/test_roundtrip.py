@@ -104,8 +104,13 @@ class ItemParseTests(unittest.TestCase):
     def test_extract_strings_ignores_short_runs(self):
         blob = b"\x00ab\x00Longer string here\x00\x01\x02"
         strings = extract_strings(blob, min_len=3)
-        self.assertNotIn("ab", strings)
-        self.assertIn("Longer string here", strings)
+        texts = [m["text"] for m in strings]
+        self.assertNotIn("ab", texts)
+        self.assertIn("Longer string here", texts)
+        # Offset points at the start of the run (byte 4 in this blob).
+        found = next(m for m in strings if m["text"] == "Longer string here")
+        self.assertEqual(found["offset"], 4)
+        self.assertEqual(found["length"], len("Longer string here"))
 
 
 class EditTests(unittest.TestCase):

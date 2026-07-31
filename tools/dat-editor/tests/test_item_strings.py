@@ -272,5 +272,70 @@ class UnparseableTests(unittest.TestCase):
         self.assertEqual(rebuilt, plain)
 
 
+class RawStringEditTests(unittest.TestCase):
+    """Fallback edit path for items whose strings block we can't parse."""
+
+    def _make_unparseable_item(self, marker: bytes, marker_offset: int = 100):
+        header = struct.pack(
+            _HEADER_FMT,
+            18001, 0, 1, int(ItemType.ARMOR), 0, 0, 1,
+            int(Slot.HEAD), int(Race.ALL), int(Job.WAR),
+            0, 0, 0, 0, 0, 0, 0, b"\x00\x00",
+        )
+        tail = bytearray(RECORD_SIZE - len(header))
+        struct.pack_into("<II", tail, 0, 999999, 0xDEADBEEF)
+        tail[marker_offset : marker_offset + len(marker)] = marker
+        return Item.from_plain(header + bytes(tail))
+
+    def test_strings_meta_reports_offsets(self):
+        item = self._make_unparseable_item(b"garbage tail marker")
+        # strings_meta MUST include the marker with the exact tail offset.
+        found = next(
+            (m for m in item.strings_meta if m["text"] == "garbage tail marker"),
+            None,
+        )
+        self.assertIsNotNone(found)
+        self.assertEqual(found["offset"], 100)
+        self.assertEqual(found["length"], len("garbage tail marker"))
+
+    def test_raw_string_edit_replaces_bytes_in_place(self):
+        item = self._make_unparseable_item(b"garbage tail marker")
+        item.apply_dict(
+            {"raw_string_edits": [{"offset": 100, "text": "custom tag replaced"}]}
+        )
+        # Same-length replacement lands exactly where the old bytes were.
+        rebuilt = item.to_plain()
+        item2 = Item.from_plain(rebuilt)
+        self.assertIn("custom tag replaced", item2.strings)
+        self.assertNotIn("garbage tail marker", item2.strings)
+
+    def test_raw_string_edit_pads_shorter_value_with_nuls(self):
+        item = self._make_unparseable_item(b"garbage tail marker")  # 19 bytes
+        item.apply_dict(
+            {"raw_string_edits": [{"offset": 100, "text": "short"}]}
+        )
+        rebuilt = item.to_plain()
+        # Header is 40 bytes; tail marker was at 100 → absolute offset 140.
+        abs_offset = 40 + 100
+        self.assertEqual(rebuilt[abs_offset : abs_offset + 5], b"short")
+        # The rest of the 19-byte slot is NUL-padded so downstream
+        # bytes don't shift.
+        self.assertEqual(rebuilt[abs_offset + 5 : abs_offset + 19], b"\x00" * 14)
+
+    def test_raw_string_edit_rejects_longer_value(self):
+        item = self._make_unparseable_item(b"short")  # 5 bytes
+        with self.assertRaises(ValueError):
+            item.apply_dict(
+                {"raw_string_edits": [{"offset": 100, "text": "way too long"}]}
+            )
+
+    def test_raw_string_edit_rejects_unknown_offset(self):
+        item = self._make_unparseable_item(b"marker")
+        with self.assertRaises(ValueError):
+            item.apply_dict(
+                {"raw_string_edits": [{"offset": 999, "text": "anywhere"}]}
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

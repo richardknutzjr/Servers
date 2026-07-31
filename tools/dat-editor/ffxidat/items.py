@@ -145,6 +145,12 @@ class Item:
     # block. See extract_strings() below.
     strings: list[str] = field(default_factory=list)
 
+    # Same run of extracted preview strings as ``strings``, but with the
+    # byte offset (relative to ``tail``) and length of each run. Used by
+    # the raw-string editor to safely rewrite individual strings in-place
+    # for items whose strings block we couldn't fully parse.
+    strings_meta: list[dict] = field(default_factory=list)
+
     # Structured strings block (name, log names, description). Editable
     # when ``strings_block.parsed`` is True; otherwise treated as opaque
     # and passed through unchanged on save.
@@ -278,7 +284,8 @@ class Item:
             item.strings_max_size = size
             item.strings_block = block
 
-        item.strings = extract_strings(item.tail)
+        item.strings_meta = extract_strings(item.tail)
+        item.strings = [m["text"] for m in item.strings_meta]
         return item
 
     def to_plain(self, record_size: int = RECORD_SIZE) -> bytes:
@@ -361,6 +368,7 @@ class Item:
         d["is_weapon"] = self.is_weapon
         d["strings_block"] = self.strings_block.to_dict() if self.strings_block else None
         d["strings_offset"] = self.strings_offset
+        d["strings_meta"] = list(self.strings_meta)
         return d
 
     def apply_dict(self, patch: dict) -> None:
@@ -409,6 +417,66 @@ class Item:
         # Strings block: nested edits go through StringsBlock.apply_dict.
         if "strings_block" in patch and self.strings_block is not None and patch["strings_block"]:
             self.strings_block.apply_dict(patch["strings_block"])
+
+        # Raw-string edits for items whose structured strings block we
+        # couldn't parse: rewrite individual bytes at known preview
+        # offsets. See apply_raw_string_edits() for the safety rules.
+        if "raw_string_edits" in patch and patch["raw_string_edits"]:
+            self.apply_raw_string_edits(patch["raw_string_edits"])
+
+    def apply_raw_string_edits(self, edits: list[dict]) -> list[dict]:
+        """Rewrite specific runs of preview-extracted strings in ``tail``.
+
+        Each edit is ``{"offset": int, "text": str}``. The offset must
+        match one recorded in ``strings_meta`` (i.e. one of the runs the
+        preview extractor found). The new text is encoded latin-1 and
+        must be no longer than the original run's byte length — shorter
+        values are padded out with NUL bytes so nothing downstream in
+        the tail shifts position.
+
+        This is the fallback edit path for weapons and other items
+        whose strings block layout we don't fully understand: we can
+        safely overwrite bytes we can pinpoint exactly, but rejecting
+        length-growing edits keeps us from corrupting whatever follows.
+        """
+        applied: list[dict] = []
+        new_tail = bytearray(self.tail)
+        for edit in edits:
+            offset = int(edit["offset"])
+            new_text = str(edit.get("text", ""))
+            meta = next(
+                (m for m in self.strings_meta if int(m["offset"]) == offset),
+                None,
+            )
+            if meta is None:
+                raise ValueError(
+                    f"no preview string at tail offset {offset}; "
+                    f"cannot safely edit an unknown byte range"
+                )
+            current_length = int(meta["length"])
+            encoded = new_text.encode("latin-1")
+            if len(encoded) > current_length:
+                raise ValueError(
+                    f"new value is {len(encoded)} bytes but the original "
+                    f"string at offset {offset} is only {current_length} "
+                    f"bytes; shorten it or leave the extra space blank"
+                )
+            padded = encoded + b"\x00" * (current_length - len(encoded))
+            if offset + current_length > len(new_tail):
+                raise ValueError(
+                    f"offset {offset}+{current_length} runs past end of tail"
+                )
+            new_tail[offset : offset + current_length] = padded
+            meta["text"] = new_text
+            applied.append({
+                "offset": offset,
+                "text": new_text,
+                "length": current_length,
+            })
+        self.tail = bytes(new_tail)
+        # Keep the flat ``strings`` list in sync with strings_meta.
+        self.strings = [m["text"] for m in self.strings_meta]
+        return applied
 
 
 def _looks_like_real_text(block: StringsBlock) -> bool:
@@ -478,24 +546,40 @@ def _find_strings_block(record: bytes, weapon: bool):
     return None
 
 
-def extract_strings(tail: bytes, min_len: int = 3) -> list[str]:
-    """Pull ASCII/latin-1 run-of-printable strings out of the tail.
+def extract_strings(tail: bytes, min_len: int = 3) -> list[dict]:
+    """Return every ASCII/latin-1 run of printable bytes in the tail.
 
-    This is a heuristic preview so the UI can label items. It is NOT a
-    full FFXI dialog-table decoder; editing item names still requires
-    working on the tail bytes directly.
+    Each entry is ``{"offset": int, "text": str, "length": int}`` with
+    ``offset`` measured from the start of ``tail`` and ``length`` the
+    byte length of the run (equals ``len(text)`` for latin-1, which
+    every FFXI item DAT uses).
+
+    Used both as a preview when the structured strings block parser
+    fails, and as the source of truth for the raw-string editor that
+    lets users rewrite individual strings in-place.
     """
-    out: list[str] = []
+    out: list[dict] = []
+    run_start = 0
     current: list[int] = []
-    for b in tail:
+    for i, b in enumerate(tail):
         if 0x20 <= b < 0x7F:
+            if not current:
+                run_start = i
             current.append(b)
         else:
             if len(current) >= min_len:
-                out.append(bytes(current).decode("latin-1"))
+                out.append({
+                    "offset": run_start,
+                    "text": bytes(current).decode("latin-1"),
+                    "length": len(current),
+                })
             current = []
     if len(current) >= min_len:
-        out.append(bytes(current).decode("latin-1"))
+        out.append({
+            "offset": run_start,
+            "text": bytes(current).decode("latin-1"),
+            "length": len(current),
+        })
     return out
 
 
